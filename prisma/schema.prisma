@@ -1,0 +1,480 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Rentflow – Prisma Schema
+// Sistema SaaS multi-tenant para renta de vehículos
+// Base de datos: PostgreSQL (Supabase)
+// ─────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // La URL de conexión ya no vive aquí en Prisma 7:
+  // - CLI/migraciones → prisma.config.ts (usa DIRECT_URL)
+  // - Runtime (PrismaClient) → driver adapter en src/lib/prisma.ts (usa DATABASE_URL)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum VehicleStatus {
+  available
+  reserved
+  in_use
+  maintenance
+  retained
+
+  @@map("vehicle_status")
+}
+
+enum AlertType {
+  oil_change
+  insurance_renewal
+  tires
+  technical_inspection
+  custom
+
+  @@map("alert_type")
+}
+
+enum IdType {
+  passport
+  license
+
+  @@map("id_type")
+}
+
+enum ReservationStatus {
+  pending
+  confirmed
+  active
+  completed
+  cancelled
+
+  @@map("reservation_status")
+}
+
+enum ExtraType {
+  gps
+  baby_seat
+  extra_driver
+  custom
+
+  @@map("extra_type")
+}
+
+enum BlockReason {
+  maintenance
+  cleaning
+  repair
+  custom
+
+  @@map("block_reason")
+}
+
+enum InspectionType {
+  checkout
+  checkin
+
+  @@map("inspection_type")
+}
+
+enum FuelLevel {
+  full
+  three_quarters
+  half
+  quarter
+  empty
+
+  @@map("fuel_level")
+}
+
+enum DamageSeverity {
+  scratch
+  dent
+  crack
+  missing
+  other
+
+  @@map("damage_severity")
+}
+
+enum VehicleZone {
+  front
+  rear
+  left
+  right
+  top
+  interior
+
+  @@map("vehicle_zone")
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+  status_change
+
+  @@map("audit_action")
+}
+
+enum UserRole {
+  superadmin
+  admin
+  operator
+
+  @@map("user_role")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FUNDACIÓN – MULTI-TENANT
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Tenant {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  slug      String   @unique                   // URL-friendly: "savings-car-rental"
+  plan      String   @default("basic")          // basic | standard | pro | custom
+  active    Boolean  @default(true)
+  settings  Json     @default("{}")             // { logo_url, primary_color, timezone }
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relaciones
+  features                 TenantFeature[]
+  users                    User[]
+  vehicles                 Vehicle[]
+  vehicleMaintenanceAlerts VehicleMaintenanceAlert[]
+  clients                  Client[]
+  clientBlacklist          ClientBlacklist[]
+  reservations             Reservation[]
+  vehicleBlocks            VehicleBlock[]
+  contracts                Contract[]
+  inspections              Inspection[]
+  auditLogs                AuditLog[]
+
+  @@map("tenants")
+}
+
+// Feature flags por tenant – un registro por módulo por empresa
+model TenantFeature {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  featureKey String    @map("feature_key") // fleet | calendar | clients | contracts | blacklist | maintenance_alerts | inspection | reports
+  enabled    Boolean   @default(false)
+  enabledAt  DateTime? @map("enabled_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, featureKey])
+  @@index([tenantId])
+  @@map("tenant_features")
+}
+
+// El id es el mismo UUID que Supabase Auth genera para el usuario
+model User {
+  id        String   @id @db.Uuid             // = Supabase Auth uid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  email     String   @unique
+  fullName  String   @map("full_name")
+  role      UserRole @default(operator)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Relaciones como autor de acciones
+  createdReservations   Reservation[]           @relation("ReservationCreatedBy")
+  confirmedReservations Reservation[]           @relation("ReservationConfirmedBy")
+  vehicleBlocks         VehicleBlock[]
+  generatedContracts    Contract[]
+  inspections           Inspection[]
+  resolvedAlerts        VehicleMaintenanceAlert[]
+  addedBlacklist        ClientBlacklist[]       @relation("BlacklistAddedBy")
+  removedBlacklist      ClientBlacklist[]       @relation("BlacklistRemovedBy")
+  createdClients        Client[]
+  auditLogs             AuditLog[]
+
+  @@index([tenantId])
+  @@index([email])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO: FLOTA
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Vehicle {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  plates          String
+  vin             String?
+  brand           String
+  model           String
+  year            Int
+  color           String
+  status          VehicleStatus @default(available)
+  insurancePolicy String?       @map("insurance_policy")
+  insuranceExpiry DateTime?     @map("insurance_expiry") @db.Date
+  permitExpiry    DateTime?     @map("permit_expiry") @db.Date
+  notes           String?
+  active          Boolean       @default(true)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  maintenanceAlerts VehicleMaintenanceAlert[]
+  reservations      Reservation[]
+  vehicleBlocks     VehicleBlock[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("vehicles")
+}
+
+model VehicleMaintenanceAlert {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  vehicleId   String    @map("vehicle_id") @db.Uuid
+  alertType   AlertType @map("alert_type")
+  description String?                          // Obligatorio si alertType = custom
+  dueDate     DateTime? @map("due_date") @db.Date
+  dueKm       Int?      @map("due_km")
+  resolved    Boolean   @default(false)
+  resolvedAt  DateTime? @map("resolved_at") @db.Timestamptz(6)
+  resolvedBy  String?   @map("resolved_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle  Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  resolver User?    @relation(fields: [resolvedBy], references: [id])
+
+  @@index([tenantId, resolved])
+  @@index([vehicleId])
+  @@map("vehicle_maintenance_alerts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO: CLIENTES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Client {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  fullName      String    @map("full_name")
+  idType        IdType    @map("id_type")           // passport | license
+  idNumber      String    @map("id_number")
+  phone         String?
+  email         String?
+  licenseNumber String?   @map("license_number")
+  licenseExpiry DateTime? @map("license_expiry") @db.Date
+  notes         String?
+  createdBy     String    @map("created_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator      User              @relation(fields: [createdBy], references: [id])
+  reservations Reservation[]
+  blacklist    ClientBlacklist[]
+
+  @@index([tenantId])
+  @@index([tenantId, idNumber])
+  @@map("clients")
+}
+
+model ClientBlacklist {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String    @map("tenant_id") @db.Uuid
+  clientId  String    @map("client_id") @db.Uuid
+  reason    String
+  active    Boolean   @default(true)
+  addedBy   String    @map("added_by") @db.Uuid
+  addedAt   DateTime  @default(now()) @map("added_at") @db.Timestamptz(6)
+  removedBy String?   @map("removed_by") @db.Uuid
+  removedAt DateTime? @map("removed_at") @db.Timestamptz(6)
+
+  tenant  Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client  Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  adder   User   @relation("BlacklistAddedBy", fields: [addedBy], references: [id])
+  remover User?  @relation("BlacklistRemovedBy", fields: [removedBy], references: [id])
+
+  @@index([tenantId, clientId, active])
+  @@map("client_blacklist")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO: RESERVAS Y CALENDARIO
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Reservation {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String            @map("tenant_id") @db.Uuid
+  clientId    String            @map("client_id") @db.Uuid
+  vehicleId   String            @map("vehicle_id") @db.Uuid
+  startDate   DateTime          @map("start_date") @db.Timestamptz(6)
+  endDate     DateTime          @map("end_date") @db.Timestamptz(6)
+  status      ReservationStatus @default(pending)
+  notes       String?
+  createdBy   String            @map("created_by") @db.Uuid
+  confirmedBy String?           @map("confirmed_by") @db.Uuid
+  confirmedAt DateTime?         @map("confirmed_at") @db.Timestamptz(6)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  client    Client  @relation(fields: [clientId], references: [id])
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
+  creator   User    @relation("ReservationCreatedBy", fields: [createdBy], references: [id])
+  confirmer User?   @relation("ReservationConfirmedBy", fields: [confirmedBy], references: [id])
+
+  extras      ReservationExtra[]
+  contract    Contract?
+  inspections Inspection[]
+
+  // Índice para consultas de disponibilidad por fecha
+  @@index([tenantId, vehicleId, startDate, endDate])
+  @@index([tenantId, status])
+  @@index([tenantId, clientId])
+  @@map("reservations")
+}
+
+model ReservationExtra {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reservationId String    @map("reservation_id") @db.Uuid
+  extraType     ExtraType @map("extra_type")
+  description   String?                          // Obligatorio si extraType = custom
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@index([reservationId])
+  @@map("reservation_extras")
+}
+
+model VehicleBlock {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String      @map("tenant_id") @db.Uuid
+  vehicleId String      @map("vehicle_id") @db.Uuid
+  reason    BlockReason
+  notes     String?
+  startDate DateTime    @map("start_date") @db.Timestamptz(6)
+  endDate   DateTime    @map("end_date") @db.Timestamptz(6)
+  createdBy String      @map("created_by") @db.Uuid
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  creator User    @relation(fields: [createdBy], references: [id])
+
+  @@index([tenantId, vehicleId, startDate, endDate])
+  @@map("vehicle_blocks")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO: CONTRATOS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Contract {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  reservationId String    @unique @map("reservation_id") @db.Uuid
+  storagePath   String    @map("storage_path")   // Ruta en Supabase Storage
+  version       Int       @default(1)
+  generatedBy   String    @map("generated_by") @db.Uuid
+  generatedAt   DateTime  @default(now()) @map("generated_at") @db.Timestamptz(6)
+  signedAt      DateTime? @map("signed_at") @db.Timestamptz(6)
+  signatureData String?   @map("signature_data") // base64 de la firma digital (EXTRA)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+  generator   User        @relation(fields: [generatedBy], references: [id])
+
+  @@index([tenantId])
+  @@map("contracts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO: INSPECCIONES (CHECK-IN / CHECK-OUT)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Inspection {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String         @map("tenant_id") @db.Uuid
+  reservationId String         @map("reservation_id") @db.Uuid
+  type          InspectionType                    // checkout | checkin
+  odometer      Int
+  fuelLevel     FuelLevel      @map("fuel_level")
+  notes         String?
+  inspectorId   String         @map("inspector_id") @db.Uuid
+  completedAt   DateTime       @default(now()) @map("completed_at") @db.Timestamptz(6)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+  inspector   User        @relation(fields: [inspectorId], references: [id])
+
+  damagePoints InspectionDamagePoint[]
+  photos       InspectionPhoto[]
+
+  // Una reserva tiene máximo un checkout y un checkin
+  @@unique([reservationId, type])
+  @@index([tenantId])
+  @@map("inspections")
+}
+
+model InspectionDamagePoint {
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inspectionId String         @map("inspection_id") @db.Uuid
+  xPct         Float          @map("x_pct")        // Posición X en diagrama 2D (0–100)
+  yPct         Float          @map("y_pct")        // Posición Y en diagrama 2D (0–100)
+  zone         VehicleZone
+  severity     DamageSeverity
+  description  String?
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  inspection Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@index([inspectionId])
+  @@map("inspection_damage_points")
+}
+
+model InspectionPhoto {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inspectionId String   @map("inspection_id") @db.Uuid
+  storagePath  String   @map("storage_path")       // Ruta en Supabase Storage
+  caption      String?
+  uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
+
+  inspection Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@index([inspectionId])
+  @@map("inspection_photos")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDITORÍA
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String      @map("tenant_id") @db.Uuid
+  userId       String      @map("user_id") @db.Uuid
+  entityType   String      @map("entity_type")     // "vehicle" | "reservation" | "client" | …
+  entityId     String      @map("entity_id") @db.Uuid
+  action       AuditAction
+  fieldChanged String?     @map("field_changed")
+  oldValue     Json?       @map("old_value")
+  newValue     Json?       @map("new_value")
+  timestamp    DateTime    @default(now()) @db.Timestamptz(6)
+  ipAddress    String?     @map("ip_address")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, timestamp])
+  @@map("audit_logs")
+}
