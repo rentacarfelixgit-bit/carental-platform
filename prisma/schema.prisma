@@ -121,6 +121,13 @@ enum AuditAction {
   @@map("audit_action")
 }
 
+enum PaymentMethod {
+  cash
+  card
+
+  @@map("payment_method")
+}
+
 enum UserRole {
   superadmin
   admin
@@ -138,8 +145,9 @@ model Tenant {
   name      String
   slug      String   @unique                   // URL-friendly: "savings-car-rental"
   plan      String   @default("basic")          // basic | standard | pro | custom
+  timezone  String   @default("UTC")            // IANA timezone, e.g. "America/Santo_Domingo"
   active    Boolean  @default(true)
-  settings  Json     @default("{}")             // { logo_url, primary_color, timezone }
+  settings  Json     @default("{}")             // { logo_url, primary_color, address, phone, rnc, email, city }
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   // Relaciones
@@ -220,6 +228,7 @@ model Vehicle {
   insurancePolicy String?       @map("insurance_policy")
   insuranceExpiry DateTime?     @map("insurance_expiry") @db.Date
   permitExpiry    DateTime?     @map("permit_expiry") @db.Date
+  dailyRate       Decimal?      @map("daily_rate") @db.Decimal(10, 2)
   notes           String?
   active          Boolean       @default(true)
   createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -268,9 +277,15 @@ model Client {
   idType        IdType    @map("id_type")           // passport | license
   idNumber      String    @map("id_number")
   phone         String?
+  phone2        String?   @map("phone_2")           // Número de contacto local / secundario
   email         String?
   licenseNumber String?   @map("license_number")
   licenseExpiry DateTime? @map("license_expiry") @db.Date
+  // Dirección completa (para el contrato)
+  address       String?
+  city          String?
+  state         String?
+  zipCode       String?   @map("zip_code")
   notes         String?
   createdBy     String    @map("created_by") @db.Uuid
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -319,6 +334,51 @@ model Reservation {
   endDate     DateTime          @map("end_date") @db.Timestamptz(6)
   status      ReservationStatus @default(pending)
   notes       String?
+
+  // ── Contrato / pricing ──────────────────────────────────────────────────
+  dailyRate       Decimal?       @map("daily_rate")       @db.Decimal(10, 2) // USD por día
+  deposit         Decimal?       @db.Decimal(10, 2)
+  exchangeRate    Decimal?       @map("exchange_rate")    @db.Decimal(10, 4) // USD → RD
+  paymentMethod   PaymentMethod? @map("payment_method")
+  itbis           Decimal?       @db.Decimal(5, 2)        // % ITBIS (ej: 18.00)
+  airportFee      Decimal?       @map("airport_fee")      @db.Decimal(10, 2)
+  discount        Decimal?       @db.Decimal(10, 2)
+  station         String?                                  // Estación / oficina de entrega
+  folio           String?                                  // Folio interno del depósito
+  approvalNumber  String?        @map("approval_number")  // Número de aprobación
+
+  // ── Seguros (cada uno: precio + decisión del cliente) ───────────────────
+  // CDW = Collision Damage Waiver
+  insuranceCdwAccepted  Boolean?  @map("insurance_cdw_accepted")
+  insuranceCdwPrice     Decimal?  @map("insurance_cdw_price")     @db.Decimal(10, 2)
+  // LIA = Liability
+  insuranceLiaAccepted  Boolean?  @map("insurance_lia_accepted")
+  insuranceLiaPrice     Decimal?  @map("insurance_lia_price")     @db.Decimal(10, 2)
+  // TW = Tires & Windshield
+  insuranceTwAccepted   Boolean?  @map("insurance_tw_accepted")
+  insuranceTwPrice      Decimal?  @map("insurance_tw_price")      @db.Decimal(10, 2)
+  // AT = Anti-Theft
+  insuranceAtAccepted   Boolean?  @map("insurance_at_accepted")
+  insuranceAtPrice      Decimal?  @map("insurance_at_price")      @db.Decimal(10, 2)
+
+  // ── Conductor adicional 1 ────────────────────────────────────────────────
+  additionalDriverName    String?  @map("additional_driver_name")
+  additionalDriverLicense String?  @map("additional_driver_license")
+  additionalDriverPhone   String?  @map("additional_driver_phone")
+
+  // ── Conductor adicional 2 ────────────────────────────────────────────────
+  additionalDriver2Name    String?  @map("additional_driver2_name")
+  additionalDriver2License String?  @map("additional_driver2_license")
+  additionalDriver2Phone   String?  @map("additional_driver2_phone")
+
+  // ── Info adicional del conductor principal ───────────────────────────────
+  driverAge      Int?     @map("driver_age")
+  clientHasPets  Boolean? @default(false) @map("client_has_pets")
+  localAddress   String?  @map("local_address") // Dirección local durante la renta
+
+  // ── Vehículo de reemplazo (si aplica) ───────────────────────────────────
+  replacementVehicleId String? @map("replacement_vehicle_id") @db.Uuid
+
   createdBy   String            @map("created_by") @db.Uuid
   confirmedBy String?           @map("confirmed_by") @db.Uuid
   confirmedAt DateTime?         @map("confirmed_at") @db.Timestamptz(6)
@@ -347,6 +407,7 @@ model ReservationExtra {
   reservationId String    @map("reservation_id") @db.Uuid
   extraType     ExtraType @map("extra_type")
   description   String?                          // Obligatorio si extraType = custom
+  pricePerDay   Decimal?  @map("price_per_day") @db.Decimal(10, 2) // USD por día de este extra
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)

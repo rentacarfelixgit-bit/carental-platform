@@ -24,3 +24,19 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+button.text-sm {
+  color: black!important;
+}
+
+button.text-sm.bg-blue-600,
+button.bg-blue-600,
+button.text-sm.bg-gray-700,
+button.text-sm.bg-green-600,
+button.text-sm.bg-gray-900
+{
+  color: white!important;
+}
+input, select, textarea {
+  color: black!important;
+}
