@@ -121,7 +121,7 @@ export default function CleanupForm() {
                   disabled={isPending}
                   className="flex-1 py-2 text-sm font-medium bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50"
                 >
-                  {step === 'confirming' ? 'Eliminando...' : 'Confirmar limpieza'}
+                  {(step as string) === 'confirming' ? 'Eliminando...' : 'Confirmar limpieza'}
                 </button>
               </div>
             </>

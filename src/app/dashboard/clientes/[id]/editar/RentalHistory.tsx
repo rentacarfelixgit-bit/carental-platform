@@ -40,7 +40,7 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
             .order('created_at', { ascending: false })
             .limit(20)
             .then(({ data }) => {
-              setReservations((data ?? []) as Reservation[])
+              setReservations((data ?? []) as unknown as Reservation[])
               setLoading(false)
             })
         })

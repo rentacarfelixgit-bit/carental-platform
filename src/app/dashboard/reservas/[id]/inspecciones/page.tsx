@@ -88,7 +88,7 @@ export default async function InspeccionesResumenPage({ params }: Props) {
   const checkin  = inspections?.find(i => i.type === 'checkin')  as Inspection | undefined
   const canInspect = reservation.status !== 'cancelled'
 
-  const v = reservation.vehicles as { brand: string; model: string; plates: string } | null
+  const v = reservation.vehicles as unknown as { brand: string; model: string; plates: string } | null
 
   // Zonas con daño en el checkout (para la comparativa)
   const checkoutZones = new Set((checkout?.inspection_damage_points ?? []).map(d => d.zone))

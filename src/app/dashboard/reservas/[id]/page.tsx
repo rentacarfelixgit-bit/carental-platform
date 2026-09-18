@@ -49,8 +49,8 @@ export default async function ReservaDetailPage({ params }: Props) {
 
   if (!reservation) redirect('/dashboard/reservas')
 
-  const client  = reservation.clients  as { id: string; full_name: string; id_number: string; phone: string | null; email: string | null } | null
-  const vehicle = reservation.vehicles as { id: string; plates: string; brand: string; model: string; year: number; color: string } | null
+  const client  = reservation.clients  as unknown as { id: string; full_name: string; id_number: string; phone: string | null; email: string | null } | null
+  const vehicle = reservation.vehicles as unknown as { id: string; plates: string; brand: string; model: string; year: number; color: string } | null
   const extras  = (reservation.reservation_extras ?? []) as { id: string; extra_type: string; description: string | null }[]
 
   const nights = Math.ceil(

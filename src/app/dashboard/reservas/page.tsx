@@ -120,8 +120,8 @@ export default async function ReservasPage({ searchParams }: Props) {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {reservations.map((r) => {
-                  const client  = r.clients  as { full_name: string; id_number: string } | null
-                  const vehicle = r.vehicles as { plates: string; brand: string; model: string } | null
+                  const client  = r.clients  as unknown as { full_name: string; id_number: string } | null
+                  const vehicle = r.vehicles as unknown as { plates: string; brand: string; model: string } | null
                   const nights  = Math.ceil(
                     (new Date(r.end_date).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
                   )
