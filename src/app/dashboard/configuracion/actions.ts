@@ -14,7 +14,13 @@ export async function saveBusinessData(formData: FormData) {
   if (!profile || (profile.role !== 'admin' && profile.role !== 'superadmin'))
     return { error: 'Sin permisos' }
 
+  // Leer settings actuales para hacer merge (no sobreescribir impuestos u otros campos)
+  const { data: tenant } = await supabase
+    .from('tenants').select('settings').eq('id', profile.tenant_id).single()
+  const current = (tenant?.settings as Record<string, unknown>) ?? {}
+
   const settings = {
+    ...current,
     company_name: formData.get('company_name')?.toString().trim() ?? '',
     address:      formData.get('address')?.toString().trim() ?? '',
     city:         formData.get('city')?.toString().trim() ?? '',
@@ -28,6 +34,35 @@ export async function saveBusinessData(formData: FormData) {
   const { error } = await supabase
     .from('tenants')
     .update({ settings })
+    .eq('id', profile.tenant_id)
+
+  if (error) return { error: error.message }
+  revalidatePath('/dashboard/configuracion')
+  return { success: true }
+}
+
+// ── Guardar configuración de impuestos ──────────────────────────────────────
+export async function saveTaxSettings(taxes: {
+  tax_itbis: boolean
+  tax_airport: boolean
+  tax_digital: boolean
+}) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autenticado' }
+
+  const { data: profile } = await supabase
+    .from('users').select('tenant_id, role').eq('id', user.id).single()
+  if (!profile || (profile.role !== 'admin' && profile.role !== 'superadmin'))
+    return { error: 'Sin permisos' }
+
+  const { data: tenant } = await supabase
+    .from('tenants').select('settings').eq('id', profile.tenant_id).single()
+  const current = (tenant?.settings as Record<string, unknown>) ?? {}
+
+  const { error } = await supabase
+    .from('tenants')
+    .update({ settings: { ...current, ...taxes } })
     .eq('id', profile.tenant_id)
 
   if (error) return { error: error.message }

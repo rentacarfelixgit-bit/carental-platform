@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import BusinessForm from './BusinessForm'
 import VehicleRatesForm from './VehicleRatesForm'
+import TaxForm from './TaxForm'
 
 export default async function ConfiguracionPage() {
   const supabase = await createClient()
@@ -40,6 +41,17 @@ export default async function ConfiguracionPage() {
           Datos del negocio
         </h2>
         <BusinessForm settings={settings} tenantName={tenant?.name ?? ''} timezone={tenant?.timezone ?? 'UTC'} />
+      </section>
+
+      {/* ── Impuestos ─────────────────────────────────────────────────────── */}
+      <section>
+        <h2 className="text-sm font-semibold text-gray-700 mb-1 pb-2 border-b border-gray-200">
+          Impuestos y cargos
+        </h2>
+        <p className="text-xs text-gray-400 mb-4">
+          Activa los impuestos que aplican. Se calcularán sobre el subtotal y se mostrarán en el contrato.
+        </p>
+        <TaxForm settings={settings} />
       </section>
 
       {/* ── Tarifas por vehículo ──────────────────────────────────────────── */}

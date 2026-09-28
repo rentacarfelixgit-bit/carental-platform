@@ -90,7 +90,7 @@ export default async function ContratoPrintPage({ params }: Props) {
   const { data: reservation } = await supabase
     .from('reservations')
     .select(`
-      id, start_date, end_date, status, notes,
+      id, start_date, end_date, status, notes, total_amount,
       clients ( id, full_name, id_type, id_number, license_number, license_expiry, phone, email ),
       vehicles ( id, plates, brand, model, year, color, vin ),
       reservation_extras ( id, extra_type, description )
@@ -130,13 +130,30 @@ export default async function ContratoPrintPage({ params }: Props) {
 
   const contratoNum = id.slice(0, 8).toUpperCase()
   const companyName = tenant?.name ?? 'Savings Car Rental'
-  const s = (tenant?.settings as Record<string, string>) ?? {}
-  const bizAddress = s.address ? `DIRECCIÓN: ${s.address.toUpperCase()}.` : 'DIRECCIÓN: AVENIDA VICTOR MANUEL ESPAILLAT UVERAL, LICEY AL MEDIO.'
-  const bizCity    = s.city    ? s.city.toUpperCase() + '.' : 'AEROPUERTO INTERNACIONAL DEL CIBAO.'
-  const bizEmail   = s.email   ? `EMAIL: ${s.email.toUpperCase()}` : 'EMAIL: FELIXCASTILLOCARRENTAL@GMAIL.COM'
-  const bizEmail2  = s.email_2 ? `EMAIL: ${s.email_2.toUpperCase()}` : 'EMAIL: RESERVACIONRENTCAR@GMAIL.COM'
-  const bizPhone   = s.phone   ? `TELÉFONO: ${s.phone}.` : 'TELÉFONO: 829-864-3074.'
-  const bizRnc     = s.rnc     ? `RNC: ${s.rnc}.` : 'RNC: 131754092.'
+  const s = (tenant?.settings as Record<string, unknown>) ?? {}
+  const bizAddress = s.address ? `DIRECCIÓN: ${String(s.address).toUpperCase()}.` : 'DIRECCIÓN: AVENIDA VICTOR MANUEL ESPAILLAT UVERAL, LICEY AL MEDIO.'
+  const bizCity    = s.city    ? String(s.city).toUpperCase() + '.' : 'AEROPUERTO INTERNACIONAL DEL CIBAO.'
+  const bizEmail   = s.email   ? `EMAIL: ${String(s.email).toUpperCase()}` : 'EMAIL: FELIXCASTILLOCARRENTAL@GMAIL.COM'
+  const bizEmail2  = s.email_2 ? `EMAIL: ${String(s.email_2).toUpperCase()}` : 'EMAIL: RESERVACIONRENTCAR@GMAIL.COM'
+  const bizPhone   = s.phone   ? `TELÉFONO: ${String(s.phone)}.` : 'TELÉFONO: 829-864-3074.'
+  const bizRnc     = s.rnc     ? `RNC: ${String(s.rnc)}.` : 'RNC: 131754092.'
+
+  // ── Impuestos ───────────────────────────────────────────────────────────────
+  const taxItbis   = Boolean(s.tax_itbis)
+  const taxAirport = Boolean(s.tax_airport)
+  const taxDigital = Boolean(s.tax_digital)
+
+  const dailyRate  = reservation.total_amount
+    ? Number(reservation.total_amount) / nights
+    : null
+  const subtotal   = dailyRate ? dailyRate * nights : null
+  const itbisAmt   = (subtotal && taxItbis)   ? subtotal * 0.18 : null
+  const airportAmt = (subtotal && taxAirport) ? subtotal * 0.10 : null
+  const digitalAmt = (subtotal && taxDigital) ? subtotal * 0.05 : null
+  const totalTaxes = (itbisAmt ?? 0) + (airportAmt ?? 0) + (digitalAmt ?? 0)
+  const totalUSD   = subtotal ? subtotal + totalTaxes : null
+
+  const fmt = (n: number | null) => n != null ? `$${n.toFixed(2)}` : ''
 
   const extraDriver = extras.find(e => e.extra_type === 'extra_driver')
 
@@ -410,22 +427,23 @@ export default async function ContratoPrintPage({ params }: Props) {
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}/>
                           </tr>
                         ))}
-                        {[
-                          'TASA DE CAMBIO: USD - RD',
-                          'DEPÓSITO',
-                          'SUB-TOTAL',
-                          'IMPUESTOS: ITBIS (   )',
-                          'IMPUESTOS: AIRPORT (   )',
-                          'DESCUENTOS',
-                        ].map((item, i) => (
+                        {([
+                          ['TASA DE CAMBIO: USD - RD', ''],
+                          ['DEPÓSITO', ''],
+                          ['SUB-TOTAL', fmt(subtotal)],
+                          ...(taxItbis   ? [['IMPUESTOS: ITBIS (18%)',            fmt(itbisAmt)]]   : [['IMPUESTOS: ITBIS (   )', '']]),
+                          ...(taxAirport ? [['IMPUESTOS: AEROPORTUARIO (10%)',    fmt(airportAmt)]] : [['IMPUESTOS: AIRPORT (   )', '']]),
+                          ...(taxDigital ? [['IMPUESTOS: PAGOS DIGITALES (5%)',   fmt(digitalAmt)]] : []),
+                          ['DESCUENTOS', ''],
+                        ] as [string, string][]).map(([label, val], i) => (
                           <tr key={`t${i}`}>
-                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%', fontWeight: item.includes('TOTAL') || item.includes('DESCUENTO') ? 700 : 400 }}>{item}</td>
-                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}/>
+                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>{label}</td>
+                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}>{val}</td>
                           </tr>
                         ))}
                         <tr>
                           <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN DÓLARES (USD):</td>
-                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}/>
+                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmt(totalUSD)}</td>
                         </tr>
                         <tr>
                           <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN PESOS (RD):</td>
