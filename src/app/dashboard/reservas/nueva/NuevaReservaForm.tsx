@@ -4,7 +4,7 @@
 // Form reactivo: al cambiar fechas filtra vehículos disponibles,
 // al cambiar cliente avisa si está en lista negra.
 
-import { useState, useTransition, useActionState } from 'react'
+import { useState, useTransition, useActionState, useEffect, useRef } from 'react'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { createReservation, getAvailableVehicles } from '../actions'
 import BlacklistWarning from '@/components/dashboard/BlacklistWarning'
@@ -15,6 +15,9 @@ interface Vehicle { id: string; plates: string; brand: string; model: string; ye
 
 interface Props {
   clients: Client[]
+  initialStartDate?: string
+  initialEndDate?: string
+  initialVehicleId?: string
 }
 
 const EXTRAS = [
@@ -24,22 +27,45 @@ const EXTRAS = [
   { value: 'custom',       label: 'Extra personalizado' },
 ]
 
-export default function NuevaReservaForm({ clients }: Props) {
+export default function NuevaReservaForm({ clients, initialStartDate = '', initialEndDate = '', initialVehicleId = '' }: Props) {
   const [state, action, pending] = useActionState(createReservation, {})
 
   const [selectedClientId, setSelectedClientId] = useState('')
   const [blacklistStatus, setBlacklistStatus]   = useState<{ blacklisted: boolean; reason?: string; addedAt?: string } | null>(null)
   const [checkingBlacklist, setCheckingBlacklist] = useTransition()
 
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate]     = useState('')
+  const [startDate, setStartDate] = useState(initialStartDate)
+  const [endDate, setEndDate]     = useState(initialEndDate)
   const [availableVehicles, setAvailableVehicles] = useState<Vehicle[] | null>(null)
   const [loadingVehicles, setLoadingVehicles] = useTransition()
+  const [pendingVehicleId, setPendingVehicleId] = useState(initialVehicleId)
 
   const [selectedVehicleRate, setSelectedVehicleRate] = useState<number | null>(null)
   const [totalAmount, setTotalAmount] = useState('')
 
   const [selectedExtras, setSelectedExtras] = useState<string[]>([])
+  const vehicleSelectRef = useRef<HTMLSelectElement>(null)
+
+  // Si venimos del calendario con fechas pre-llenadas, cargar vehículos al montar
+  useEffect(() => {
+    if (initialStartDate && initialEndDate && new Date(initialEndDate) > new Date(initialStartDate)) {
+      setLoadingVehicles(async () => {
+        const vehicles = await getAvailableVehicles(initialStartDate, initialEndDate)
+        const list = vehicles as Vehicle[]
+        setAvailableVehicles(list)
+        // Pre-seleccionar el vehículo si viene del calendario
+        if (initialVehicleId) {
+          const v = list.find(v => v.id === initialVehicleId)
+          if (v) {
+            setSelectedVehicleRate(v.daily_rate ?? null)
+            const days = Math.ceil((new Date(initialEndDate).getTime() - new Date(initialStartDate).getTime()) / (1000 * 60 * 60 * 24))
+            if (v.daily_rate && days > 0) setTotalAmount((v.daily_rate * days).toFixed(2))
+          }
+        }
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Al cambiar cliente → verificar lista negra
   function handleClientChange(clientId: string) {
@@ -213,7 +239,9 @@ export default function NuevaReservaForm({ clients }: Props) {
                   </label>
                   <select
                     name="vehicle_id"
+                    ref={vehicleSelectRef}
                     disabled={pending}
+                    defaultValue={initialVehicleId}
                     onChange={e => handleVehicleChange(e.target.value)}
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50"
                   >
