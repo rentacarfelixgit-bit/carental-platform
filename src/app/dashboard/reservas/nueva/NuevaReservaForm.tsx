@@ -11,7 +11,7 @@ import BlacklistWarning from '@/components/dashboard/BlacklistWarning'
 import Link from 'next/link'
 
 interface Client { id: string; full_name: string; id_number: string }
-interface Vehicle { id: string; plates: string; brand: string; model: string; year: number; color: string }
+interface Vehicle { id: string; plates: string; brand: string; model: string; year: number; color: string; daily_rate?: number | null }
 
 interface Props {
   clients: Client[]
@@ -35,6 +35,9 @@ export default function NuevaReservaForm({ clients }: Props) {
   const [endDate, setEndDate]     = useState('')
   const [availableVehicles, setAvailableVehicles] = useState<Vehicle[] | null>(null)
   const [loadingVehicles, setLoadingVehicles] = useTransition()
+
+  const [selectedVehicleRate, setSelectedVehicleRate] = useState<number | null>(null)
+  const [totalAmount, setTotalAmount] = useState('')
 
   const [selectedExtras, setSelectedExtras] = useState<string[]>([])
 
@@ -77,7 +80,23 @@ export default function NuevaReservaForm({ clients }: Props) {
     setLoadingVehicles(async () => {
       const vehicles = await getAvailableVehicles(s, e)
       setAvailableVehicles(vehicles as Vehicle[])
+      // Reset vehicle selection when dates change
+      setSelectedVehicleRate(null)
+      setTotalAmount('')
     })
+  }
+
+  // Al cambiar vehículo → auto-rellenar tarifa sugerida
+  function handleVehicleChange(vehicleId: string) {
+    const vehicle = availableVehicles?.find(v => v.id === vehicleId)
+    const rate = vehicle?.daily_rate ?? null
+    setSelectedVehicleRate(rate)
+    if (rate && startDate && endDate) {
+      const days = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))
+      setTotalAmount(days > 0 ? (rate * days).toFixed(2) : '')
+    } else {
+      setTotalAmount('')
+    }
   }
 
   function toggleExtra(value: string) {
@@ -187,23 +206,51 @@ export default function NuevaReservaForm({ clients }: Props) {
             availableVehicles.length === 0 ? (
               <p className="text-sm text-orange-600">No hay vehículos disponibles para esas fechas.</p>
             ) : (
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Vehículo disponible * <span className="text-gray-400 font-normal">({availableVehicles.length} opción{availableVehicles.length !== 1 ? 'es' : ''})</span>
-                </label>
-                <select
-                  name="vehicle_id"
-                  disabled={pending}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50"
-                >
-                  <option value="">— Elige un vehículo —</option>
-                  {availableVehicles.map(v => (
-                    <option key={v.id} value={v.id}>
-                      {v.brand} {v.model} {v.year} · {v.plates} · {v.color}
-                    </option>
-                  ))}
-                </select>
-                {state.fieldErrors?.vehicle_id && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.vehicle_id[0]}</p>}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Vehículo disponible * <span className="text-gray-400 font-normal">({availableVehicles.length} opción{availableVehicles.length !== 1 ? 'es' : ''})</span>
+                  </label>
+                  <select
+                    name="vehicle_id"
+                    disabled={pending}
+                    onChange={e => handleVehicleChange(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50"
+                  >
+                    <option value="">— Elige un vehículo —</option>
+                    {availableVehicles.map(v => (
+                      <option key={v.id} value={v.id}>
+                        {v.brand} {v.model} {v.year} · {v.plates} · {v.color}
+                        {v.daily_rate ? ` · $${v.daily_rate}/día` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {state.fieldErrors?.vehicle_id && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.vehicle_id[0]}</p>}
+                </div>
+
+                {/* Tarifa y total */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                    Total a cobrar (USD)
+                    {selectedVehicleRate && startDate && endDate && new Date(endDate) > new Date(startDate) && (
+                      <span className="ml-2 text-xs text-gray-400 font-normal">
+                        Tarifa sugerida: ${selectedVehicleRate}/día × {Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))} día(s)
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    type="number"
+                    name="total_amount"
+                    min="0"
+                    step="0.01"
+                    value={totalAmount}
+                    onChange={e => setTotalAmount(e.target.value)}
+                    disabled={pending}
+                    placeholder="0.00"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                  />
+                  <p className="mt-1 text-xs text-gray-400">Se calcula automáticamente al seleccionar el vehículo. Puedes ajustarlo manualmente.</p>
+                </div>
               </div>
             )
           ) : null}

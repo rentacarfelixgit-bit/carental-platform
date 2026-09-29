@@ -13,7 +13,8 @@ import type { NextRequest } from 'next/server'
 const PUBLIC_ROUTES = ['/login', '/auth/callback']
 
 // Prefijos de ruta exclusivos de superadmin
-const SUPERADMIN_ROUTES = ['/superadmin']
+// (El panel de superadmin es una app independiente — no existe en este proyecto)
+const SUPERADMIN_ROUTES: string[] = []
 
 // Rutas solo para admin (no operator)
 // NOTA: Solo incluir rutas donde el JWT tiene user_role en el claim.
@@ -100,10 +101,6 @@ export async function middleware(request: NextRequest) {
 
   // ── Redirect raíz ─────────────────────────────────────────────────────────
   if (pathname === '/') {
-    // Superadmin → panel de superadmin
-    if (user.email === process.env.SUPERADMIN_EMAIL) {
-      return NextResponse.redirect(new URL('/superadmin', request.url))
-    }
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 

@@ -17,11 +17,12 @@ export type ReservationFormState = {
 }
 
 const ReservationSchema = z.object({
-  client_id:  z.string().uuid('Selecciona un cliente'),
-  vehicle_id: z.string().uuid('Selecciona un vehículo'),
-  start_date: z.string().min(1, 'La fecha de inicio es requerida'),
-  end_date:   z.string().min(1, 'La fecha de fin es requerida'),
-  notes:      z.string().optional(),
+  client_id:    z.string().uuid('Selecciona un cliente'),
+  vehicle_id:   z.string().uuid('Selecciona un vehículo'),
+  start_date:   z.string().min(1, 'La fecha de inicio es requerida'),
+  end_date:     z.string().min(1, 'La fecha de fin es requerida'),
+  notes:        z.string().optional(),
+  total_amount: z.string().optional(),
 })
 
 async function getContext() {
@@ -57,7 +58,7 @@ export async function getAvailableVehicles(startDate: string, endDate: string) {
 
   let query = ctx.supabase
     .from('vehicles')
-    .select('id, plates, brand, model, year, color')
+    .select('id, plates, brand, model, year, color, daily_rate')
     .eq('tenant_id', ctx.tenantId)
     .eq('active', true)
     .order('brand')
@@ -79,7 +80,7 @@ export async function createReservation(
   const parsed = ReservationSchema.safeParse(Object.fromEntries(formData))
   if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors }
 
-  const { client_id, vehicle_id, start_date, end_date, notes } = parsed.data
+  const { client_id, vehicle_id, start_date, end_date, notes, total_amount } = parsed.data
 
   // Validar que end_date > start_date
   if (new Date(end_date) <= new Date(start_date)) {
@@ -117,14 +118,15 @@ export async function createReservation(
   const { data: reservation, error } = await ctx.supabase
     .from('reservations')
     .insert({
-      tenant_id:  ctx.tenantId,
+      tenant_id:    ctx.tenantId,
       client_id,
       vehicle_id,
       start_date,
       end_date,
-      notes:      notes || null,
-      created_by: ctx.user.id,
-      updated_at: new Date().toISOString(),
+      notes:        notes || null,
+      total_amount: total_amount ? parseFloat(total_amount) : null,
+      created_by:   ctx.user.id,
+      updated_at:   new Date().toISOString(),
     })
     .select('id')
     .single()
