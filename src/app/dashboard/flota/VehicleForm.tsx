@@ -107,17 +107,17 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Datos del vehículo</h2>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Marca *" name="brand" defaultValue={state.values?.brand ?? vehicle?.brand} error={getFieldError('brand')} disabled={pending} placeholder="Toyota" maxLength={100} required />
             <Field label="Modelo *" name="model" defaultValue={state.values?.model ?? vehicle?.model} error={getFieldError('model')} disabled={pending} placeholder="Corolla" maxLength={100} required />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Año *" name="year" type="number" defaultValue={state.values?.year ?? vehicle?.year?.toString()} error={getFieldError('year')} disabled={pending} placeholder="2022" min={1990} max={new Date().getFullYear() + 1} required />
             <Field label="Color *" name="color" defaultValue={state.values?.color ?? vehicle?.color} error={getFieldError('color')} disabled={pending} placeholder="Blanco" maxLength={50} required />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Placas *" name="plates" defaultValue={state.values?.plates ?? vehicle?.plates} error={getFieldError('plates')} disabled={pending} placeholder="ABC-1234" className="uppercase" maxLength={20} required />
             <Field label="VIN (opcional)" name="vin" defaultValue={state.values?.vin ?? vehicle?.vin ?? ''} disabled={pending} placeholder="1HGBH41JXMN109186" maxLength={17} />
           </div>
@@ -129,7 +129,7 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
 
           <Field label="Póliza de seguro" name="insurance_policy" defaultValue={state.values?.insurance_policy ?? vehicle?.insurance_policy ?? ''} disabled={pending} placeholder="POL-123456" maxLength={100} />
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Vencimiento seguro" name="insurance_expiry" type="date" defaultValue={state.values?.insurance_expiry ?? vehicle?.insurance_expiry?.split('T')[0] ?? ''} disabled={pending} />
             <Field label="Vencimiento permiso" name="permit_expiry" type="date" defaultValue={state.values?.permit_expiry ?? vehicle?.permit_expiry?.split('T')[0] ?? ''} disabled={pending} />
           </div>

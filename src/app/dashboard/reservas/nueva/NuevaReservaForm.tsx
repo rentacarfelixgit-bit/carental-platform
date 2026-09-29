@@ -184,7 +184,7 @@ export default function NuevaReservaForm({ clients, initialStartDate = '', initi
         {/* Fechas */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Periodo</h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Fecha y hora de salida *</label>
               <input
@@ -287,7 +287,7 @@ export default function NuevaReservaForm({ clients, initialStartDate = '', initi
         {/* Extras */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
           <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Extras (opcional)</h2>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {EXTRAS.map(e => (
               <label key={e.value} className="flex items-center gap-2.5 cursor-pointer group">
                 <input

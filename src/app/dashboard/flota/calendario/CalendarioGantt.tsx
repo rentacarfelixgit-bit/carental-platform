@@ -201,7 +201,11 @@ export default function CalendarioGantt({
   }
 
   return (
-    <div className="overflow-x-auto">
+    <div>
+      <p className="sm:hidden text-xs text-gray-400 px-4 pt-3 pb-1">
+        ← Desliza horizontalmente para ver el calendario →
+      </p>
+      <div className="overflow-x-auto">
       <table
         className="border-collapse text-sm"
         style={{ minWidth: `${192 + days * 48}px`, width: '100%' }}
@@ -250,6 +254,7 @@ export default function CalendarioGantt({
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }

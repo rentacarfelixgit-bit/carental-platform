@@ -95,7 +95,7 @@ export default async function FlotaPage({ searchParams }: Props) {
   return (
     <div className="p-6 max-w-6xl mx-auto">
       {/* Encabezado */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Flota</h1>
           <p className="text-sm text-gray-500 mt-0.5">
@@ -103,7 +103,7 @@ export default async function FlotaPage({ searchParams }: Props) {
             {totalPages > 1 && ` · Página ${page} de ${totalPages}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Link
             href="/dashboard/flota/calendario"
             className="inline-flex items-center gap-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg transition-colors"

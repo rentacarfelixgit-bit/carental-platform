@@ -109,7 +109,7 @@ export default async function ReservaDetailPage({ params }: Props) {
         {/* Periodo */}
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3 mb-3">Periodo</h2>
-          <div className="grid grid-cols-2 gap-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
             <div>
               <p className="text-xs text-gray-400 mb-0.5">Salida</p>
               <p className="font-medium text-gray-900">{new Date(reservation.start_date).toLocaleString('es-MX')}</p>
