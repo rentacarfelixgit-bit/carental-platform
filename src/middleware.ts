@@ -17,11 +17,12 @@ const PUBLIC_ROUTES = ['/login', '/auth/callback']
 const SUPERADMIN_ROUTES: string[] = []
 
 // Rutas solo para admin (no operator)
-// NOTA: Solo incluir rutas donde el JWT tiene user_role en el claim.
-// Si el hook de Supabase no está activo, el claim no existe y el middleware
-// bloquea aunque el usuario sí sea admin. En ese caso, la protección se hace
-// dentro de la página/action con la DB directamente.
-const ADMIN_ONLY_ROUTES: string[] = []
+// El JWT hook está activo → user_role llega en el claim en cada sesión.
+const ADMIN_ONLY_ROUTES: string[] = [
+  '/dashboard/configuracion',
+  '/dashboard/usuarios',
+  '/dashboard/admin',
+]
 
 // Decodifica el payload del JWT para leer custom claims
 function getJwtClaims(token?: string): Record<string, string> | null {
