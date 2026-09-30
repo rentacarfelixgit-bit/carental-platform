@@ -61,7 +61,8 @@ export async function createVehicle(
   const supabase = await createClient()
   const { error } = await supabase.from('vehicles').insert({
     ...parsed.data,
-    tenant_id: tenantId,
+    tenant_id:         tenantId,
+    updated_at:        new Date().toISOString(),
     vin:               parsed.data.vin || null,
     insurance_policy:  parsed.data.insurance_policy || null,
     insurance_expiry:  parsed.data.insurance_expiry || null,

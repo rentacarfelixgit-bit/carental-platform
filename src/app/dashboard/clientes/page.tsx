@@ -112,14 +112,25 @@ export default async function ClientesPage({ searchParams }: Props) {
       </div>
 
       {/* Búsqueda */}
-      <form method="GET" className="flex gap-3 mb-5">
+      <form
+        method="GET"
+        className="flex gap-3 mb-5"
+        onSubmit={(e) => {
+          const btn = (e.currentTarget as HTMLFormElement).querySelector('button[type="submit"]') as HTMLButtonElement | null
+          if (btn) { btn.disabled = true; btn.textContent = 'Buscando…' }
+        }}
+      >
         <input
           name="q"
           defaultValue={q}
           placeholder="Buscar por nombre, ID, teléfono o email..."
           className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          maxLength={100}
         />
-        <button type="submit" className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+        <button
+          type="submit"
+          className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60"
+        >
           Buscar
         </button>
         {q && (

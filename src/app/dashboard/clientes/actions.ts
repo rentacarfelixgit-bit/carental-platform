@@ -8,20 +8,27 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 
 const ClientSchema = z.object({
-  full_name:      z.string().min(1, 'El nombre es requerido'),
-  id_type:        z.enum(['passport', 'license']),
-  id_number:      z.string().min(1, 'El número de identificación es requerido'),
-  phone:          z.string().optional(),
-  email:          z.string().email('Email inválido').optional().or(z.literal('')),
-  license_number: z.string().optional(),
-  license_expiry: z.string().optional(),
-  notes:          z.string().optional(),
+  full_name:       z.string().trim().min(1, 'El nombre es requerido').max(150),
+  phone_code:      z.string().optional(),
+  phone:           z.string().trim().max(20).optional().transform(v => v || null),
+  email:           z.string().trim().email('Email inválido').max(150).optional().or(z.literal('')).transform(v => v || null),
+  license_number:  z.string().trim().max(30).optional().transform(v => v || null),
+  license_expiry:  z.string().optional().transform(v => v || null),
+  passport_number: z.string().trim().max(30).optional().transform(v => v || null),
+  notes:           z.string().trim().max(2000).optional().transform(v => v || null),
 })
 
 export type ClientFormState = {
   error?: string
   fieldErrors?: Record<string, string[]>
+  values?: Record<string, string>
   success?: boolean
+}
+
+function getValues(formData: FormData): Record<string, string> {
+  return Object.fromEntries(
+    Array.from(formData.entries(), ([k, v]) => [k, typeof v === 'string' ? v : ''])
+  )
 }
 
 async function getContext() {
@@ -43,27 +50,83 @@ export async function createClient_(
   _prev: ClientFormState,
   formData: FormData
 ): Promise<ClientFormState> {
+  const values = getValues(formData)
   const parsed = ClientSchema.safeParse(Object.fromEntries(formData))
-  if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors }
+  if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors, values }
+
+  const { license_number, passport_number } = parsed.data
+
+  // Al menos un ID obligatorio
+  if (!license_number && !passport_number) {
+    return {
+      error: 'Debes ingresar al menos un número de identificación (licencia o pasaporte).',
+      values,
+    }
+  }
 
   const ctx = await getContext()
-  if (!ctx) return { error: 'No autorizado' }
+  if (!ctx) return { error: 'No autorizado', values }
+
+  // Componer teléfono con lada
+  const phone = parsed.data.phone
+    ? `${parsed.data.phone_code ?? ''}${parsed.data.phone}`.trim() || null
+    : null
+
+  // Determinar id_type e id_number (para compatibilidad con columnas existentes)
+  const id_type   = license_number ? 'license' : 'passport'
+  const id_number = (license_number ?? passport_number)!
+
+  // Verificar duplicado por licencia
+  if (license_number) {
+    const { data: existing } = await ctx.supabase
+      .from('clients')
+      .select('id, full_name')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('license_number', license_number)
+      .maybeSingle()
+    if (existing) {
+      return {
+        error: `Ya existe un cliente con esa licencia: ${existing.full_name}.`,
+        values,
+      }
+    }
+  }
+
+  // Verificar duplicado por pasaporte
+  if (passport_number) {
+    const { data: existing } = await ctx.supabase
+      .from('clients')
+      .select('id, full_name')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('passport_number', passport_number)
+      .maybeSingle()
+    if (existing) {
+      return {
+        error: `Ya existe un cliente con ese pasaporte: ${existing.full_name}.`,
+        values,
+      }
+    }
+  }
 
   const { error } = await ctx.supabase.from('clients').insert({
-    ...parsed.data,
-    tenant_id:      ctx.tenantId,
-    created_by:     ctx.user.id,
-    updated_at:     new Date().toISOString(),
-    phone:          parsed.data.phone          || null,
-    email:          parsed.data.email          || null,
-    license_number: parsed.data.license_number || null,
-    license_expiry: parsed.data.license_expiry || null,
-    notes:          parsed.data.notes          || null,
+    full_name:       parsed.data.full_name,
+    id_type,
+    id_number,
+    phone,
+    email:           parsed.data.email,
+    license_number,
+    license_expiry:  parsed.data.license_expiry,
+    passport_number,
+    notes:           parsed.data.notes,
+    tenant_id:       ctx.tenantId,
+    created_by:      ctx.user.id,
+    updated_at:      new Date().toISOString(),
   })
 
   if (error) {
-    if (error.code === '23505') return { error: 'Ya existe un cliente con ese número de identificación.' }
-    return { error: error.message }
+    if (error.code === '23505')
+      return { error: 'Ya existe un cliente con ese número de identificación.', values }
+    return { error: error.message, values }
   }
 
   revalidatePath('/dashboard/clientes')
@@ -77,27 +140,81 @@ export async function updateClient(
   _prev: ClientFormState,
   formData: FormData
 ): Promise<ClientFormState> {
+  const values = getValues(formData)
   const parsed = ClientSchema.safeParse(Object.fromEntries(formData))
-  if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors }
+  if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors, values }
+
+  const { license_number, passport_number } = parsed.data
+
+  if (!license_number && !passport_number) {
+    return {
+      error: 'Debes ingresar al menos un número de identificación (licencia o pasaporte).',
+      values,
+    }
+  }
 
   const ctx = await getContext()
-  if (!ctx) return { error: 'No autorizado' }
+  if (!ctx) return { error: 'No autorizado', values }
+
+  const phone = parsed.data.phone
+    ? `${parsed.data.phone_code ?? ''}${parsed.data.phone}`.trim() || null
+    : null
+
+  // Verificar duplicado por licencia (excluyendo al cliente actual)
+  if (license_number) {
+    const { data: existing } = await ctx.supabase
+      .from('clients')
+      .select('id, full_name')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('license_number', license_number)
+      .neq('id', clientId)
+      .maybeSingle()
+    if (existing) {
+      return {
+        error: `Ya existe otro cliente con esa licencia: ${existing.full_name}.`,
+        values,
+      }
+    }
+  }
+
+  // Verificar duplicado por pasaporte (excluyendo al cliente actual)
+  if (passport_number) {
+    const { data: existing } = await ctx.supabase
+      .from('clients')
+      .select('id, full_name')
+      .eq('tenant_id', ctx.tenantId)
+      .eq('passport_number', passport_number)
+      .neq('id', clientId)
+      .maybeSingle()
+    if (existing) {
+      return {
+        error: `Ya existe otro cliente con ese pasaporte: ${existing.full_name}.`,
+        values,
+      }
+    }
+  }
+
+  const id_type   = license_number ? 'license' : 'passport'
+  const id_number = (license_number ?? passport_number)!
 
   const { error } = await ctx.supabase
     .from('clients')
     .update({
-      ...parsed.data,
-      updated_at:     new Date().toISOString(),
-      phone:          parsed.data.phone          || null,
-      email:          parsed.data.email          || null,
-      license_number: parsed.data.license_number || null,
-      license_expiry: parsed.data.license_expiry || null,
-      notes:          parsed.data.notes          || null,
+      full_name:       parsed.data.full_name,
+      id_type,
+      id_number,
+      phone,
+      email:           parsed.data.email,
+      license_number,
+      license_expiry:  parsed.data.license_expiry,
+      passport_number,
+      notes:           parsed.data.notes,
+      updated_at:      new Date().toISOString(),
     })
     .eq('id', clientId)
     .eq('tenant_id', ctx.tenantId)
 
-  if (error) return { error: error.message }
+  if (error) return { error: error.message, values }
 
   revalidatePath('/dashboard/clientes')
   redirect('/dashboard/clientes')
@@ -116,6 +233,17 @@ export async function addToBlacklist(
   const ctx = await getContext()
   if (!ctx) return { error: 'No autorizado' }
   if (ctx.role !== 'admin') return { error: 'Solo los administradores pueden gestionar la lista negra.' }
+
+  // Verificar que no esté ya en lista negra
+  const { data: existing } = await ctx.supabase
+    .from('client_blacklist')
+    .select('id')
+    .eq('client_id', clientId)
+    .eq('tenant_id', ctx.tenantId)
+    .eq('active', true)
+    .maybeSingle()
+
+  if (existing) return { error: 'Este cliente ya está en la lista negra.' }
 
   const { error } = await ctx.supabase.from('client_blacklist').insert({
     client_id: clientId,

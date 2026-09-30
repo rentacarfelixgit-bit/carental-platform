@@ -2,7 +2,7 @@
 
 // src/app/dashboard/clientes/[id]/editar/BlacklistSection.tsx
 
-import { useActionState, useTransition } from 'react'
+import { useActionState, useTransition, useState, useEffect } from 'react'
 import { addToBlacklist, removeFromBlacklist } from '../../actions'
 
 interface BlacklistEntry {
@@ -17,16 +17,31 @@ interface Props {
   activeEntry: BlacklistEntry | null
 }
 
-export default function BlacklistSection({ clientId, isAdmin, activeEntry }: Props) {
-  const boundAdd  = addToBlacklist.bind(null, clientId)
+export default function BlacklistSection({ clientId, isAdmin, activeEntry: initialEntry }: Props) {
+  // Estado local para reflejar cambios inmediatamente sin esperar re-fetch
+  const [activeEntry, setActiveEntry] = useState<BlacklistEntry | null>(initialEntry)
+
+  const boundAdd = addToBlacklist.bind(null, clientId)
   const [addState, addAction, addPending] = useActionState(boundAdd, {})
   const [removePending, startRemove] = useTransition()
+
+  // Cuando el server action responde success, crear entrada local
+  useEffect(() => {
+    if (addState.success && !activeEntry) {
+      setActiveEntry({
+        id: 'pending-refresh',
+        reason: '(ver al recargar)',
+        added_at: new Date().toISOString(),
+      })
+    }
+  }, [addState.success])
 
   function handleRemove() {
     if (!activeEntry) return
     if (!confirm('¿Retirar a este cliente de la lista negra?')) return
     startRemove(async () => {
       await removeFromBlacklist(activeEntry.id, clientId)
+      setActiveEntry(null)
     })
   }
 
@@ -43,7 +58,6 @@ export default function BlacklistSection({ clientId, isAdmin, activeEntry }: Pro
         </div>
 
         {activeEntry ? (
-          // Cliente en lista negra — mostrar info y botón para retirar
           <div className="p-4 bg-red-50 border border-red-200 rounded-xl space-y-3">
             <div>
               <p className="text-xs text-red-500 mb-0.5">Motivo</p>
@@ -52,7 +66,7 @@ export default function BlacklistSection({ clientId, isAdmin, activeEntry }: Pro
                 Agregado el {new Date(activeEntry.added_at).toLocaleDateString('es-MX')}
               </p>
             </div>
-            {isAdmin && (
+            {isAdmin && activeEntry.id !== 'pending-refresh' && (
               <button
                 onClick={handleRemove}
                 disabled={removePending}
@@ -62,42 +76,37 @@ export default function BlacklistSection({ clientId, isAdmin, activeEntry }: Pro
               </button>
             )}
           </div>
-        ) : (
-          // Cliente limpio — admins pueden agregar
-          isAdmin ? (
-            <form action={addAction} className="space-y-3">
-              {addState.error && (
-                <p className="text-xs text-red-600">{addState.error}</p>
-              )}
-              {addState.success && (
-                <p className="text-xs text-green-600">Cliente agregado a la lista negra.</p>
-              )}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Motivo para agregar a lista negra
-                </label>
-                <textarea
-                  name="reason"
-                  rows={2}
-                  disabled={addPending}
-                  placeholder="Describe el motivo..."
-                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 resize-none placeholder:text-gray-400 disabled:opacity-50"
-                />
-                {addState.fieldErrors?.reason && (
-                  <p className="mt-1 text-xs text-red-600">{addState.fieldErrors.reason[0]}</p>
-                )}
-              </div>
-              <button
-                type="submit"
+        ) : isAdmin ? (
+          <form action={addAction} className="space-y-3">
+            {addState.error && (
+              <p className="text-xs text-red-600">{addState.error}</p>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Motivo para agregar a lista negra
+              </label>
+              <textarea
+                name="reason"
+                rows={2}
                 disabled={addPending}
-                className="text-sm px-4 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-              >
-                {addPending ? 'Agregando...' : 'Agregar a lista negra'}
-              </button>
-            </form>
-          ) : (
-            <p className="text-sm text-gray-400">Este cliente no está en la lista negra.</p>
-          )
+                placeholder="Describe el motivo..."
+                maxLength={500}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 resize-none placeholder:text-gray-400 disabled:opacity-50"
+              />
+              {addState.fieldErrors?.reason && (
+                <p className="mt-1 text-xs text-red-600">{addState.fieldErrors.reason[0]}</p>
+              )}
+            </div>
+            <button
+              type="submit"
+              disabled={addPending}
+              className="text-sm px-4 py-1.5 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+            >
+              {addPending ? 'Agregando...' : 'Agregar a lista negra'}
+            </button>
+          </form>
+        ) : (
+          <p className="text-sm text-gray-400">Este cliente no está en la lista negra.</p>
         )}
       </div>
     </div>
