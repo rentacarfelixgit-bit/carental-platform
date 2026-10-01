@@ -59,6 +59,22 @@ export async function createVehicle(
   if (!tenantId) return { error: 'No autorizado', values }
 
   const supabase = await createClient()
+
+  // Verificar placas duplicadas dentro del mismo tenant
+  const { data: existing } = await supabase
+    .from('vehicles')
+    .select('id, brand, model, year')
+    .eq('tenant_id', tenantId)
+    .eq('plates', parsed.data.plates)
+    .maybeSingle()
+
+  if (existing) {
+    return {
+      error: `Ya existe un vehículo con las placas "${parsed.data.plates}" en la flota: ${existing.brand} ${existing.model} ${existing.year}.`,
+      values,
+    }
+  }
+
   const { error } = await supabase.from('vehicles').insert({
     ...parsed.data,
     tenant_id:         tenantId,
@@ -72,7 +88,7 @@ export async function createVehicle(
 
   if (error) {
     if (error.message.includes('unique') || error.code === '23505')
-      return { error: 'Ya existe un vehículo con esas placas.', values }
+      return { error: `Ya existe un vehículo con las placas "${parsed.data.plates}".`, values }
     return { error: error.message, values }
   }
 
@@ -95,6 +111,23 @@ export async function updateVehicle(
   if (!tenantId) return { error: 'No autorizado', values }
 
   const supabase = await createClient()
+
+  // Verificar que las placas no estén en uso por otro vehículo del tenant
+  const { data: existingPlates } = await supabase
+    .from('vehicles')
+    .select('id, brand, model, year')
+    .eq('tenant_id', tenantId)
+    .eq('plates', parsed.data.plates)
+    .neq('id', vehicleId)
+    .maybeSingle()
+
+  if (existingPlates) {
+    return {
+      error: `Las placas "${parsed.data.plates}" ya están asignadas a: ${existingPlates.brand} ${existingPlates.model} ${existingPlates.year}.`,
+      values,
+    }
+  }
+
   const { error } = await supabase
     .from('vehicles')
     .update({
