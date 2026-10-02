@@ -34,7 +34,11 @@ export default function InspectionGateModal({ reservationId, type, onClose }: Pr
   const isCheckout = type === 'checkout'
 
   function handleGoInspect() {
-    router.push(`/dashboard/reservas/${reservationId}/inspecciones/${type}`)
+    const params = new URLSearchParams()
+    if (odometer) params.set('odometer', odometer)
+    if (fuelLevel) params.set('fuel', fuelLevel)
+    const qs = params.toString()
+    router.push(`/dashboard/reservas/${reservationId}/inspecciones/${type}${qs ? `?${qs}` : ''}`)
     onClose()
   }
 

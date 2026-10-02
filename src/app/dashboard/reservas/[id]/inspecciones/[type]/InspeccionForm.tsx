@@ -3,6 +3,7 @@
 // src/app/dashboard/reservas/[id]/inspecciones/[type]/InspeccionForm.tsx
 
 import { useActionState, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { createInspection } from '../actions'
 import DamageMap, { type DamagePoint } from './DamageMap'
 import PhotoUploader from './PhotoUploader'
@@ -36,6 +37,10 @@ interface Props {
 }
 
 export default function InspeccionForm({ reservationId, type, vehicleLabel, tenantId, inspectionId, baselinePhotos }: Props) {
+  const searchParams = useSearchParams()
+  const preOdometer  = searchParams.get('odometer') ?? ''
+  const preFuel      = searchParams.get('fuel') ?? ''
+
   const boundCreate = createInspection.bind(null, reservationId, inspectionId)
   const [state, action, pending] = useActionState(boundCreate, {})
   const [damagePoints, setDamagePoints] = useState<DamagePoint[]>([])
@@ -92,6 +97,7 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
                 disabled={pending}
                 placeholder="45000"
                 min="0"
+                defaultValue={preOdometer}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50"
               />
               {state.fieldErrors?.odometer && (
@@ -103,6 +109,7 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
               <select
                 name="fuel_level"
                 disabled={pending}
+                defaultValue={preFuel || 'full'}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50"
               >
                 {Object.entries(FUEL_LABELS).map(([value, label]) => (
