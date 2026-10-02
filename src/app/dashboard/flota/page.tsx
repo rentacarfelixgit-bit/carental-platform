@@ -167,25 +167,65 @@ export default async function FlotaPage({ searchParams }: Props) {
         )}
       </form>
 
-      {/* Tabla */}
+      {/* Lista / Tabla */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         {vehicles && vehicles.length > 0 ? (
           <>
-            <table className="w-full text-sm">
+            {/* ── MÓVIL: Tarjetas ───────────────────────────────────── */}
+            <div className="md:hidden divide-y divide-gray-100">
+              {vehicles.map((v) => {
+                const insuranceExpired = v.insurance_expiry && new Date(v.insurance_expiry) < new Date()
+                const hasOpenAlerts    = alertVehicleIds.has(v.id)
+                const statusCfg        = STATUS_CONFIG[v.status] ?? { label: v.status, className: 'bg-gray-100 text-gray-600' }
+                return (
+                  <div key={v.id} className={`p-4 ${!v.active ? 'opacity-50' : ''}`}>
+                    <div className="flex items-start justify-between gap-3 mb-3">
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-semibold text-gray-900">{v.brand} {v.model}</p>
+                          {hasOpenAlerts && (
+                            <span className="text-orange-500" title="Alertas de mantenimiento abiertas">
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
+                              </svg>
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-500">{v.year} · {v.color}</p>
+                        <p className="font-mono text-sm text-gray-700 mt-0.5">{v.plates}</p>
+                      </div>
+                      <span className={`flex-shrink-0 text-xs font-medium px-2 py-1 rounded-lg ${statusCfg.className}`}>
+                        {statusCfg.label}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <VehicleStatusSelect vehicleId={v.id} currentStatus={v.status} statuses={ALL_STATUSES} statusConfig={STATUS_CONFIG} />
+                      <MaintenanceLink vehicleId={v.id} hasOpenAlerts={hasOpenAlerts} />
+                      <EditVehicleLink vehicleId={v.id} />
+                    </div>
+                    {v.insurance_expiry && insuranceExpired && (
+                      <p className="text-xs text-red-600 mt-2">⚠ Seguro vencido: {new Date(v.insurance_expiry).toLocaleDateString('es-MX')}</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* ── DESKTOP: Tabla ────────────────────────────────────── */}
+            <table className="hidden md:table w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Vehículo</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Placas</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Seguro</th>
+                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Seguro</th>
                   <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {vehicles.map((v) => {
                   const insuranceExpired = v.insurance_expiry && new Date(v.insurance_expiry) < new Date()
-                  const hasOpenAlerts = alertVehicleIds.has(v.id)
-
+                  const hasOpenAlerts    = alertVehicleIds.has(v.id)
                   return (
                     <tr key={v.id} className={`hover:bg-gray-50 transition-colors ${!v.active ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-3">
@@ -195,7 +235,7 @@ export default async function FlotaPage({ searchParams }: Props) {
                             <p className="text-xs text-gray-500">{v.year} · {v.color}</p>
                           </div>
                           {hasOpenAlerts && (
-                            <span title="Tiene alertas de mantenimiento abiertas" className="text-orange-500">
+                            <span title="Alertas de mantenimiento abiertas" className="text-orange-500">
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
                               </svg>
@@ -205,14 +245,9 @@ export default async function FlotaPage({ searchParams }: Props) {
                       </td>
                       <td className="px-4 py-3 font-mono text-sm text-gray-700">{v.plates}</td>
                       <td className="px-4 py-3">
-                        <VehicleStatusSelect
-                          vehicleId={v.id}
-                          currentStatus={v.status}
-                          statuses={ALL_STATUSES}
-                          statusConfig={STATUS_CONFIG}
-                        />
+                        <VehicleStatusSelect vehicleId={v.id} currentStatus={v.status} statuses={ALL_STATUSES} statusConfig={STATUS_CONFIG} />
                       </td>
-                      <td className="px-4 py-3 hidden md:table-cell">
+                      <td className="px-4 py-3">
                         {v.insurance_expiry ? (
                           <span className={`text-xs ${insuranceExpired ? 'text-red-600 font-medium' : 'text-gray-500'}`}>
                             {insuranceExpired ? '⚠ ' : ''}{new Date(v.insurance_expiry).toLocaleDateString('es-MX')}
