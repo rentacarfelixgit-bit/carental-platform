@@ -355,6 +355,24 @@ export async function importVehicles(rows: Record<string, string>[]) {
   return { imported, skipped, errors }
 }
 
+// ── Exportar flota ───────────────────────────────────────────────────────────
+
+export async function exportVehicles() {
+  const tenantId = await getTenantId()
+  if (!tenantId) return { error: 'No autorizado', data: [] }
+
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('vehicles')
+    .select('brand, model, year, color, plates, daily_rate, vin, insurance_policy, insurance_expiry, permit_expiry, notes, status, active')
+    .eq('tenant_id', tenantId)
+    .order('brand')
+    .order('model')
+
+  if (error) return { error: error.message, data: [] }
+  return { data: data ?? [], error: null }
+}
+
 // ── Activar / desactivar ──────────────────────────────────────────────────────
 
 export async function toggleVehicleActive(vehicleId: string, active: boolean) {

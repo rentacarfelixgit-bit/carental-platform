@@ -6,6 +6,7 @@ import EditVehicleLink from './EditVehicleLink'
 import MaintenanceLink from './MaintenanceLink'
 import VehicleStatusSelect from './VehicleStatusSelect'
 import ImportarFlota from './ImportarFlota'
+import ExportarFlota from './ExportarFlota'
 
 const PAGE_SIZE = 20
 
@@ -130,6 +131,7 @@ export default async function FlotaPage({ searchParams }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <ExportarFlota />
           <ImportarFlota />
           <Link
             href="/dashboard/flota/bloqueos"
