@@ -12,6 +12,7 @@ export default function EditarVehiculoPage({ params }: { params: Promise<{ id: s
   const { id } = use(params)
   const [vehicle,  setVehicle]  = useState<Record<string, unknown> | null>(null)
   const [tenantId, setTenantId] = useState<string | null>(null)
+  const [userRole, setUserRole] = useState<string | null>(null)
 
   const boundUpdate = updateVehicle.bind(null, id)
   const [state, action, pending] = useActionState(boundUpdate, {})
@@ -23,12 +24,13 @@ export default function EditarVehiculoPage({ params }: { params: Promise<{ id: s
       if (!user) return
       supabase
         .from('users')
-        .select('tenant_id')
+        .select('tenant_id, role')
         .eq('id', user.id)
         .single()
         .then(({ data: profile }) => {
           if (!profile?.tenant_id) return
           setTenantId(profile.tenant_id)
+          setUserRole(profile.role as string)
           supabase
             .from('vehicles')
             .select('*')
@@ -40,7 +42,7 @@ export default function EditarVehiculoPage({ params }: { params: Promise<{ id: s
     })
   }, [id])
 
-  if (!vehicle || !tenantId) {
+  if (!vehicle || !tenantId || userRole === null) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full" />
@@ -57,6 +59,7 @@ export default function EditarVehiculoPage({ params }: { params: Promise<{ id: s
         vehicle={vehicle as never}
         title={`Editar — ${vehicle.brand} ${vehicle.model}`}
         submitLabel="Guardar cambios"
+        isAdmin={userRole === 'admin' || userRole === 'superadmin'}
       />
       <ToggleVehicleButton
         vehicleId={id}

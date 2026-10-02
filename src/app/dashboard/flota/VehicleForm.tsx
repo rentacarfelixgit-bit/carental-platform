@@ -15,6 +15,7 @@ interface Vehicle {
   insurance_expiry?: string | null
   permit_expiry?: string | null
   notes?: string | null
+  daily_rate?: number | null
 }
 
 interface Props {
@@ -24,11 +25,15 @@ interface Props {
   vehicle?: Vehicle
   title: string
   submitLabel: string
+  /** undefined = create mode (all users can set); true = admin editing; false = operator editing (read-only) */
+  isAdmin?: boolean
 }
 
 const requiredFields = ['brand', 'model', 'color', 'plates'] as const
 
-export default function VehicleForm({ action, state, pending, vehicle, title, submitLabel }: Props) {
+export default function VehicleForm({ action, state, pending, vehicle, title, submitLabel, isAdmin }: Props) {
+  // isAdmin === undefined means create mode (all users can set the rate)
+  const canEditRate = isAdmin !== false
   const [clientErrors, setClientErrors] = useState<Record<string, string>>({})
   const [clearedServerErrors, setClearedServerErrors] = useState<Record<string, boolean>>({})
 
@@ -65,6 +70,16 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
     for (const field of requiredFields) {
       if (!String(formData.get(field) ?? '').trim()) {
         errors[field] = 'Este campo es obligatorio.'
+      }
+    }
+
+    // Validación de tarifa diaria (obligatoria en crear; en editar solo para admin)
+    if (canEditRate) {
+      const rateRaw = String(formData.get('daily_rate') ?? '').trim()
+      if (!rateRaw) {
+        errors.daily_rate = 'La tarifa diaria es obligatoria.'
+      } else if (isNaN(Number(rateRaw)) || Number(rateRaw) <= 0) {
+        errors.daily_rate = 'Ingresa un valor mayor a 0.'
       }
     }
 
@@ -137,6 +152,40 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
           </div>
         </div>
 
+        {/* Tarifa */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+          <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Tarifa</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {canEditRate ? (
+              <Field
+                label="Tarifa diaria *"
+                name="daily_rate"
+                type="number"
+                defaultValue={state.values?.daily_rate ?? vehicle?.daily_rate?.toString() ?? ''}
+                error={getFieldError('daily_rate')}
+                disabled={pending}
+                placeholder="0.00"
+                min={0.01}
+                step={0.01}
+                required
+              />
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Tarifa diaria
+                </label>
+                <div className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-600 flex items-center gap-1">
+                  <span className="text-gray-400 text-xs">RD$</span>
+                  {vehicle?.daily_rate != null
+                    ? Number(vehicle.daily_rate).toLocaleString('es-DO', { minimumFractionDigits: 2 })
+                    : '—'}
+                </div>
+                <p className="mt-1 text-xs text-gray-400">Solo los administradores pueden modificar la tarifa.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Documentos */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Documentos y seguros</h2>
@@ -190,11 +239,11 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
 }
 
 function Field({
-  label, name, type = 'text', defaultValue, error, disabled, placeholder, className = '', required, min, max, maxLength, onInput
+  label, name, type = 'text', defaultValue, error, disabled, placeholder, className = '', required, min, max, maxLength, step, onInput
 }: {
   label: string; name: string; type?: string; defaultValue?: string
   error?: string; disabled?: boolean; placeholder?: string; className?: string
-  required?: boolean; min?: number; max?: number; maxLength?: number
+  required?: boolean; min?: number; max?: number; maxLength?: number; step?: number
   onInput?: (e: React.FormEvent<HTMLInputElement>) => void
 }) {
   return (
@@ -202,7 +251,7 @@ function Field({
       <label htmlFor={name} className="block text-sm font-medium text-gray-700 mb-1.5">{label}</label>
       <input
         id={name} name={name} type={type} defaultValue={defaultValue}
-        disabled={disabled} placeholder={placeholder} required={required} min={min} max={max} maxLength={maxLength}
+        disabled={disabled} placeholder={placeholder} required={required} min={min} max={max} maxLength={maxLength} step={step}
         onInput={onInput}
         className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50 ${error ? 'border-red-300 bg-red-50' : 'border-gray-300'} ${className}`}
       />

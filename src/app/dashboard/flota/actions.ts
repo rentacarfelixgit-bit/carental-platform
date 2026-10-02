@@ -22,6 +22,7 @@ const VehicleSchema = z.object({
   insurance_expiry:  z.string().optional(),
   permit_expiry:     z.string().optional(),
   notes:             z.string().max(2000, 'Las notas no pueden exceder 2,000 caracteres').optional(),
+  daily_rate:        z.coerce.number().positive('La tarifa diaria debe ser mayor a 0').optional(),
 })
 
 export type VehicleFormState = {
@@ -49,6 +50,23 @@ async function getTenantId() {
   return data?.tenant_id ?? null
 }
 
+async function getTenantAndRole() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+  const { data } = await supabase
+    .from('users')
+    .select('tenant_id, role')
+    .eq('id', user.id)
+    .single()
+  if (!data?.tenant_id) return null
+  return { tenantId: data.tenant_id as string, role: data.role as string }
+}
+
+function isAdmin(role: string) {
+  return role === 'admin' || role === 'superadmin'
+}
+
 // ── Crear vehículo ────────────────────────────────────────────────────────────
 
 export async function createVehicle(
@@ -58,6 +76,11 @@ export async function createVehicle(
   const values = getSubmittedValues(formData)
   const parsed = VehicleSchema.safeParse(Object.fromEntries(formData))
   if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors, values }
+
+  // daily_rate es obligatorio al crear
+  if (!parsed.data.daily_rate) {
+    return { fieldErrors: { daily_rate: ['La tarifa diaria es obligatoria.'] }, values }
+  }
 
   const tenantId = await getTenantId()
   if (!tenantId) return { error: 'No autorizado', values }
@@ -82,6 +105,7 @@ export async function createVehicle(
   const { error } = await supabase.from('vehicles').insert({
     ...parsed.data,
     tenant_id:         tenantId,
+    daily_rate:        parsed.data.daily_rate,
     updated_at:        new Date().toISOString(),
     vin:               parsed.data.vin || null,
     insurance_policy:  parsed.data.insurance_policy || null,
@@ -111,8 +135,9 @@ export async function updateVehicle(
   const parsed = VehicleSchema.safeParse(Object.fromEntries(formData))
   if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors, values }
 
-  const tenantId = await getTenantId()
-  if (!tenantId) return { error: 'No autorizado', values }
+  const userInfo = await getTenantAndRole()
+  if (!userInfo) return { error: 'No autorizado', values }
+  const { tenantId, role } = userInfo
 
   const supabase = await createClient()
 
@@ -132,10 +157,16 @@ export async function updateVehicle(
     }
   }
 
+  // daily_rate solo la actualizan admins
+  const dailyRateUpdate = isAdmin(role) && parsed.data.daily_rate
+    ? { daily_rate: parsed.data.daily_rate }
+    : {}
+
   const { error } = await supabase
     .from('vehicles')
     .update({
       ...parsed.data,
+      ...dailyRateUpdate,
       vin:               parsed.data.vin || null,
       insurance_policy:  parsed.data.insurance_policy || null,
       insurance_expiry:  parsed.data.insurance_expiry || null,
