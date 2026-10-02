@@ -28,8 +28,18 @@ interface Reservation {
   start_date: string
   end_date: string
   status: string
-  clients: { full_name: string } | null
-  vehicles: { brand: string; model: string; plates: string } | null
+  clients: { full_name: string } | { full_name: string }[] | null
+  vehicles: { brand: string; model: string; plates: string } | { brand: string; model: string; plates: string }[] | null
+}
+
+function getClient(r: Reservation): { full_name: string } | null {
+  if (!r.clients) return null
+  return Array.isArray(r.clients) ? (r.clients[0] ?? null) : r.clients
+}
+
+function getVehicle(r: Reservation): { brand: string; model: string; plates: string } | null {
+  if (!r.vehicles) return null
+  return Array.isArray(r.vehicles) ? (r.vehicles[0] ?? null) : r.vehicles
 }
 
 interface Props {
@@ -107,7 +117,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
     .not('status', 'in', '("cancelled")')
     .lte('start_date', lastDate)
     .gte('end_date',   firstDate)
-    .order('start_date')
+    .order('start_date') as { data: Reservation[] | null }
 
   // Group reservations by day
   const byDay: Record<number, Reservation[]> = {}
@@ -255,15 +265,17 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                 <div className="space-y-1 relative z-10">
                   {rsvs.slice(0, MAX_VIS).map((r) => {
                     const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
+                    const cli = getClient(r)
+                    const veh = getVehicle(r)
                     return (
                       <Link
                         key={r.id}
                         href={`/dashboard/reservas/${r.id}`}
                         className={`block w-full text-left px-2 py-1 rounded text-xs font-medium truncate ${col.bg} ${col.text} hover:brightness-95 transition-all`}
-                        title={`${r.clients?.full_name} · ${r.vehicles?.brand} ${r.vehicles?.model} (${r.vehicles?.plates})`}
+                        title={`${cli?.full_name} · ${veh?.brand} ${veh?.model} (${veh?.plates})`}
                       >
                         <span className={`inline-block w-1.5 h-1.5 rounded-full ${col.dot} mr-1 align-middle`} />
-                        {r.clients?.full_name ?? '—'}
+                        {cli?.full_name ?? '—'}
                       </Link>
                     )
                   })}
