@@ -22,69 +22,74 @@ export async function createUser(
   _prev: CreateUserState,
   formData: FormData
 ): Promise<CreateUserState> {
-  // 1. Validar campos
-  const parsed = CreateUserSchema.safeParse({
-    email: formData.get('email'),
-    full_name: formData.get('full_name'),
-    role: formData.get('role'),
-    password: formData.get('password'),
-  })
-
-  if (!parsed.success) {
-    return { fieldErrors: parsed.error.flatten().fieldErrors }
-  }
-
-  const { email, full_name, role, password } = parsed.data
-
-  const supabase = await createClient()
-  const { data: { user: currentUser } } = await supabase.auth.getUser()
-
-  if (!currentUser) return { error: 'No autorizado' }
-
-  const { data: profile } = await supabase
-    .from('users')
-    .select('tenant_id, role')
-    .eq('id', currentUser.id)
-    .single()
-
-  if (!profile?.tenant_id) return { error: 'No se pudo obtener el tenant' }
-  if (profile.role !== 'admin' && profile.role !== 'superadmin') {
-    return { error: 'No tienes permisos para crear usuarios' }
-  }
-
-  const admin = createAdminClient()
-
-  const { data: authData, error: authError } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true, 
-  })
-
-  if (authError) {
-    if (authError.message.includes('already been registered')) {
-      return { error: 'Ya existe un usuario con ese correo.' }
-    }
-    return { error: `Error al crear el usuario: ${authError.message}` }
-  }
-
-  const { error: dbError } = await admin
-    .from('users')
-    .insert({
-      id: authData.user.id,
-      tenant_id: profile.tenant_id,
-      email,
-      full_name,
-      role,
-      updated_at: new Date().toISOString(),
+  try {
+    // 1. Validar campos
+    const parsed = CreateUserSchema.safeParse({
+      email: formData.get('email'),
+      full_name: formData.get('full_name'),
+      role: formData.get('role'),
+      password: formData.get('password'),
     })
 
-  if (dbError) {
-    await admin.auth.admin.deleteUser(authData.user.id)
-    return { error: `Error al guardar el usuario: ${dbError.message}` }
-  }
+    if (!parsed.success) {
+      return { fieldErrors: parsed.error.flatten().fieldErrors }
+    }
 
-  revalidatePath('/dashboard/usuarios')
-  return { success: true }
+    const { email, full_name, role, password } = parsed.data
+
+    const supabase = await createClient()
+    const { data: { user: currentUser } } = await supabase.auth.getUser()
+
+    if (!currentUser) return { error: 'No autorizado' }
+
+    const { data: profile } = await supabase
+      .from('users')
+      .select('tenant_id, role')
+      .eq('id', currentUser.id)
+      .single()
+
+    if (!profile?.tenant_id) return { error: 'No se pudo obtener el tenant' }
+    if (profile.role !== 'admin' && profile.role !== 'superadmin') {
+      return { error: 'No tienes permisos para crear usuarios' }
+    }
+
+    const admin = createAdminClient()
+
+    const { data: authData, error: authError } = await admin.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    })
+
+    if (authError) {
+      if (authError.message.includes('already been registered') || authError.message.includes('already exists')) {
+        return { error: 'Ya existe un usuario con ese correo.' }
+      }
+      return { error: `Error al crear el usuario: ${authError.message}` }
+    }
+
+    const { error: dbError } = await admin
+      .from('users')
+      .insert({
+        id: authData.user.id,
+        tenant_id: profile.tenant_id,
+        email,
+        full_name,
+        role,
+        updated_at: new Date().toISOString(),
+      })
+
+    if (dbError) {
+      await admin.auth.admin.deleteUser(authData.user.id)
+      return { error: `Error al guardar el usuario: ${dbError.message}` }
+    }
+
+    revalidatePath('/dashboard/usuarios')
+    return { success: true }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error inesperado al crear el usuario'
+    return { error: msg }
+  }
 }
 
 export async function toggleUserActive(userId: string, active: boolean) {

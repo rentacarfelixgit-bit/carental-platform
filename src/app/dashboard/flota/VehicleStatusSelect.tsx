@@ -35,6 +35,18 @@ export default function VehicleStatusSelect({ vehicleId, currentStatus, statuses
   const cfg             = statusConfig[currentStatus] ?? { label: currentStatus, className: 'bg-gray-100 text-gray-600' }
   const currentInList   = statuses.some(s => s.value === currentStatus)
 
+  // Operadores solo pueden actuar cuando el vehículo está disponible
+  const operatorCanChange = isAdmin || currentStatus === 'available'
+
+  // Si el operador no puede cambiar, mostrar badge estático
+  if (!operatorCanChange) {
+    return (
+      <span className={`text-xs font-medium px-2 py-1 rounded-md ${cfg.className}`}>
+        {cfg.label}
+      </span>
+    )
+  }
+
   function doChange(newStatus: string) {
     startTransition(async () => {
       await changeVehicleStatus(vehicleId, newStatus)

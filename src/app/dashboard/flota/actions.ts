@@ -199,6 +199,19 @@ export async function changeVehicleStatus(vehicleId: string, status: string) {
 
   const supabase = await createClient()
 
+  // Operadores solo pueden cambiar el estado si el vehículo está disponible actualmente
+  if (!isAdmin(userInfo.role)) {
+    const { data: current } = await supabase
+      .from('vehicles')
+      .select('status')
+      .eq('id', vehicleId)
+      .eq('tenant_id', userInfo.tenantId)
+      .single()
+    if (current && current.status !== 'available') {
+      return { error: 'Solo puedes cambiar el estado de un vehículo disponible.' }
+    }
+  }
+
   // status_locked = true cuando se fija manualmente (cualquier estado excepto disponible devuelto por admin)
   // Cuando el admin pone "disponible" se libera el lock para que el sistema retome el control
   const statusLocked = status !== 'available'
