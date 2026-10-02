@@ -27,13 +27,15 @@ interface Props {
   submitLabel: string
   /** undefined = create mode (all users can set); true = admin editing; false = operator editing (read-only) */
   isAdmin?: boolean
-  /** Si se pasa, muestra botón "Continuar y agregar otro" que llama este callback al guardar exitosamente */
+  /** Si se pasa, muestra botón "Guardar y agregar otro" */
   onSaveAndAddAnother?: () => void
+  /** Callback al hacer clic en el botón principal de guardar */
+  onSave?: () => void
 }
 
 const requiredFields = ['brand', 'model', 'color', 'plates'] as const
 
-export default function VehicleForm({ action, state, pending, vehicle, title, submitLabel, isAdmin, onSaveAndAddAnother }: Props) {
+export default function VehicleForm({ action, state, pending, vehicle, title, submitLabel, isAdmin, onSaveAndAddAnother, onSave }: Props) {
   // isAdmin === undefined means create mode (all users can set the rate)
   const canEditRate = isAdmin !== false
   const [clientErrors, setClientErrors] = useState<Record<string, string>>({})
@@ -226,9 +228,8 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
           {onSaveAndAddAnother && (
             <button
               type="submit"
-              name="_intent"
-              value="save_and_add"
               disabled={pending}
+              onClick={() => onSaveAndAddAnother()}
               className="flex-1 flex items-center justify-center gap-2 bg-white border border-blue-600 text-blue-600 hover:bg-blue-50 text-sm font-medium py-2.5 rounded-lg transition-colors disabled:opacity-60"
             >
               {pending ? (
@@ -247,9 +248,8 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
 
           <button
             type="submit"
-            name="_intent"
-            value="save"
             disabled={pending}
+            onClick={() => onSave?.()}
             className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors disabled:opacity-60"
           >
             {pending ? (
