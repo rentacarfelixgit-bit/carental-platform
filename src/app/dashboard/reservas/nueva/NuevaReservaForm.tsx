@@ -8,6 +8,7 @@ import { useState, useTransition, useActionState, useEffect, useRef } from 'reac
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { createReservation, getAvailableVehicles } from '../actions'
 import BlacklistWarning from '@/components/dashboard/BlacklistWarning'
+import NuevoClienteModal from './NuevoClienteModal'
 import Link from 'next/link'
 
 interface Client { id: string; full_name: string; id_number: string }
@@ -27,12 +28,23 @@ const EXTRAS = [
   { value: 'custom',       label: 'Extra personalizado' },
 ]
 
-export default function NuevaReservaForm({ clients, initialStartDate = '', initialEndDate = '', initialVehicleId = '' }: Props) {
+export default function NuevaReservaForm({ clients: initialClients, initialStartDate = '', initialEndDate = '', initialVehicleId = '' }: Props) {
   const [state, action, pending] = useActionState(createReservation, {})
+
+  // Lista de clientes — se expande al crear uno nuevo desde el modal
+  const [clientsList, setClientsList] = useState<Client[]>(initialClients)
+  const [showClientModal, setShowClientModal] = useState(false)
 
   const [selectedClientId, setSelectedClientId] = useState('')
   const [blacklistStatus, setBlacklistStatus]   = useState<{ blacklisted: boolean; reason?: string; addedAt?: string } | null>(null)
   const [checkingBlacklist, setCheckingBlacklist] = useTransition()
+
+  // Cuando se crea un cliente desde el modal: añadirlo a la lista y seleccionarlo
+  function handleClientCreated(newClient: Client) {
+    setClientsList(prev => [newClient, ...prev])
+    handleClientChange(newClient.id)
+    setShowClientModal(false)
+  }
 
   const [startDate, setStartDate] = useState(initialStartDate)
   const [endDate, setEndDate]     = useState(initialEndDate)
@@ -159,11 +171,32 @@ export default function NuevaReservaForm({ clients, initialStartDate = '', initi
           />
         )}
 
+        {/* Modal nuevo cliente */}
+        {showClientModal && (
+          <NuevoClienteModal
+            onClientCreated={handleClientCreated}
+            onClose={() => setShowClientModal(false)}
+          />
+        )}
+
         {/* Cliente */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
           <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Cliente</h2>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Selecciona un cliente *</label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-sm font-medium text-gray-700">Selecciona un cliente *</label>
+              <button
+                type="button"
+                onClick={() => setShowClientModal(true)}
+                disabled={pending}
+                className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                Nuevo cliente
+              </button>
+            </div>
             <select
               name="client_id"
               value={selectedClientId}
@@ -172,7 +205,7 @@ export default function NuevaReservaForm({ clients, initialStartDate = '', initi
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50"
             >
               <option value="">— Elige un cliente —</option>
-              {clients.map(c => (
+              {clientsList.map(c => (
                 <option key={c.id} value={c.id}>{c.full_name} · {c.id_number}</option>
               ))}
             </select>

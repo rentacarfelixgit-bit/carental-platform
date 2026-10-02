@@ -23,6 +23,8 @@ export type ClientFormState = {
   fieldErrors?: Record<string, string[]>
   values?: Record<string, string>
   success?: boolean
+  /** Solo en createClientQuick — datos del cliente recién creado */
+  newClient?: { id: string; full_name: string; id_number: string }
 }
 
 function getValues(formData: FormData): Record<string, string> {
@@ -281,4 +283,76 @@ export async function removeFromBlacklist(blacklistId: string, clientId: string)
   revalidatePath(`/dashboard/clientes/${clientId}/editar`)
   revalidatePath('/dashboard/clientes')
   return { success: true }
+}
+
+// ── Crear cliente rápido (desde modal en nueva reserva) ───────────────────────
+// Igual que createClient_ pero devuelve los datos del cliente creado en vez de redirigir.
+
+export async function createClientQuick(
+  _prev: ClientFormState,
+  formData: FormData
+): Promise<ClientFormState> {
+  const values = getValues(formData)
+  const parsed = ClientSchema.safeParse(Object.fromEntries(formData))
+  if (!parsed.success) return { fieldErrors: parsed.error.flatten().fieldErrors, values }
+
+  const { license_number, passport_number } = parsed.data
+
+  if (!license_number && !passport_number) {
+    return {
+      error: 'Debes ingresar al menos un número de identificación (licencia o pasaporte).',
+      values,
+    }
+  }
+
+  const ctx = await getContext()
+  if (!ctx) return { error: 'No autorizado', values }
+
+  const phone = parsed.data.phone
+    ? `${parsed.data.phone_code ?? ''}${parsed.data.phone}`.trim() || null
+    : null
+
+  const id_type   = license_number ? 'license' : 'passport'
+  const id_number = (license_number ?? passport_number)!
+
+  if (license_number) {
+    const { data: existing } = await ctx.supabase
+      .from('clients').select('id, full_name')
+      .eq('tenant_id', ctx.tenantId).eq('license_number', license_number).maybeSingle()
+    if (existing) return { error: `Ya existe un cliente con esa licencia: ${existing.full_name}.`, values }
+  }
+  if (passport_number) {
+    const { data: existing } = await ctx.supabase
+      .from('clients').select('id, full_name')
+      .eq('tenant_id', ctx.tenantId).eq('passport_number', passport_number).maybeSingle()
+    if (existing) return { error: `Ya existe un cliente con ese pasaporte: ${existing.full_name}.`, values }
+  }
+
+  const { data: inserted, error } = await ctx.supabase
+    .from('clients')
+    .insert({
+      full_name:       parsed.data.full_name,
+      id_type,
+      id_number,
+      phone,
+      email:           parsed.data.email,
+      license_number,
+      license_expiry:  parsed.data.license_expiry,
+      passport_number,
+      notes:           parsed.data.notes,
+      tenant_id:       ctx.tenantId,
+      created_by:      ctx.user.id,
+      updated_at:      new Date().toISOString(),
+    })
+    .select('id, full_name, id_number')
+    .single()
+
+  if (error) {
+    if (error.code === '23505')
+      return { error: 'Ya existe un cliente con ese número de identificación.', values }
+    return { error: error.message, values }
+  }
+
+  revalidatePath('/dashboard/clientes')
+  return { success: true, newClient: inserted }
 }
