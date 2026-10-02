@@ -47,7 +47,7 @@ export default function NuevoVehiculoPage() {
       <VehicleForm
         key={resetKey}
         action={wrappedAction}
-        state={addAnother ? {} : state}
+        state={state.success ? {} : state}   // mostrar errores siempre; limpiar solo si fue éxito anterior
         pending={pending}
         title="Agregar vehículo"
         submitLabel="Agregar vehículo"
