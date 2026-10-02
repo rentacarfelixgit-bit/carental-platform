@@ -40,13 +40,16 @@ function defaultRange() {
   }
 }
 
+const FLEET_PAGE_SIZE = 10
+
 interface Props {
-  searchParams: Promise<{ desde?: string; hasta?: string }>
+  searchParams: Promise<{ desde?: string; hasta?: string; pagina_flota?: string }>
 }
 
 export default async function ReportesPage({ searchParams }: Props) {
   const defaults = defaultRange()
-  const { desde = defaults.start, hasta = defaults.end } = await searchParams
+  const { desde = defaults.start, hasta = defaults.end, pagina_flota } = await searchParams
+  const pageFlota = Math.max(1, parseInt(pagina_flota ?? '1', 10) || 1)
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -158,6 +161,19 @@ export default async function ReportesPage({ searchParams }: Props) {
       totalDays,
     }
   }).sort((a, b) => b.totalDays - a.totalDays)
+
+  const totalFleetPages = Math.max(1, Math.ceil(utilization.length / FLEET_PAGE_SIZE))
+  const safePageFlota   = Math.min(pageFlota, totalFleetPages)
+  const utilizationPage = utilization.slice(
+    (safePageFlota - 1) * FLEET_PAGE_SIZE,
+    safePageFlota * FLEET_PAGE_SIZE,
+  )
+  const maxDaysAll = Math.max(...utilization.map(u => u.totalDays), 1)
+
+  function fleetPageUrl(p: number) {
+    const qs = new URLSearchParams({ desde, hasta, pagina_flota: String(p) })
+    return `/dashboard/reportes?${qs}`
+  }
 
   const STATUS_VEHICLE_COLORS: Record<string, string> = {
     available:   'bg-green-100 text-green-700',
@@ -327,7 +343,17 @@ export default async function ReportesPage({ searchParams }: Props) {
 
       {/* ── 3. Utilización de flota ───────────────────────────────────────── */}
       <section>
-        <h2 className="text-sm font-medium text-gray-700 mb-4">Utilización de flota</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-medium text-gray-700">
+            Utilización de flota
+            <span className="ml-2 text-gray-400 font-normal">({utilization.length} vehículos)</span>
+          </h2>
+          {totalFleetPages > 1 && (
+            <p className="text-xs text-gray-400">
+              Página {safePageFlota} de {totalFleetPages}
+            </p>
+          )}
+        </div>
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -340,9 +366,8 @@ export default async function ReportesPage({ searchParams }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {utilization.length > 0 ? utilization.map(v => {
-                const maxDays = Math.max(...utilization.map(u => u.totalDays), 1)
-                const pct = Math.round((v.totalDays / maxDays) * 100)
+              {utilizationPage.length > 0 ? utilizationPage.map(v => {
+                const pct = Math.round((v.totalDays / maxDaysAll) * 100)
                 return (
                   <tr key={v.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-900">{v.brand} {v.model} <span className="text-xs text-gray-400">{v.year}</span></td>
@@ -369,6 +394,52 @@ export default async function ReportesPage({ searchParams }: Props) {
               )}
             </tbody>
           </table>
+
+          {/* Paginación */}
+          {totalFleetPages > 1 && (
+            <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between">
+              <p className="text-xs text-gray-400">
+                {(safePageFlota - 1) * FLEET_PAGE_SIZE + 1}–{Math.min(safePageFlota * FLEET_PAGE_SIZE, utilization.length)} de {utilization.length}
+              </p>
+              <div className="flex items-center gap-1">
+                <Link
+                  href={fleetPageUrl(safePageFlota - 1)}
+                  aria-disabled={safePageFlota <= 1}
+                  className={`px-2.5 py-1 text-xs rounded-lg border transition-colors ${
+                    safePageFlota <= 1
+                      ? 'border-gray-200 text-gray-300 pointer-events-none'
+                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  ← Anterior
+                </Link>
+                {Array.from({ length: totalFleetPages }, (_, i) => i + 1).map(p => (
+                  <Link
+                    key={p}
+                    href={fleetPageUrl(p)}
+                    className={`w-7 h-7 flex items-center justify-center text-xs rounded-lg border transition-colors ${
+                      p === safePageFlota
+                        ? 'bg-gray-900 border-gray-900 text-white'
+                        : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {p}
+                  </Link>
+                ))}
+                <Link
+                  href={fleetPageUrl(safePageFlota + 1)}
+                  aria-disabled={safePageFlota >= totalFleetPages}
+                  className={`px-2.5 py-1 text-xs rounded-lg border transition-colors ${
+                    safePageFlota >= totalFleetPages
+                      ? 'border-gray-200 text-gray-300 pointer-events-none'
+                      : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Siguiente →
+                </Link>
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
