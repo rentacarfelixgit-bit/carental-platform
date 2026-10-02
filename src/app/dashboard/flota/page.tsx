@@ -29,16 +29,16 @@ const OPERATOR_STATUSES = [
   { value: 'retained',    label: 'Retenido' },
 ]
 
-function LockBadge({ adminLabel }: { adminLabel: boolean }) {
+function LockBadge() {
   return (
     <span
       className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md bg-purple-100 text-purple-700"
-      title={adminLabel ? 'Estado fijado manualmente — no se actualizará automáticamente' : 'Estado fijado por un administrador'}
+      title="Estado fijado manualmente — no se actualizará automáticamente por el sistema"
     >
       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
       </svg>
-      {adminLabel ? 'Fijado' : 'Admin'}
+      Fijado
     </span>
   )
 }
@@ -244,7 +244,7 @@ export default async function FlotaPage({ searchParams }: Props) {
                         isAdmin={isAdmin}
                       />
                       {(v as { status_locked?: boolean }).status_locked && (
-                        <LockBadge adminLabel={isAdmin} />
+                        <LockBadge />
                       )}
                       <MaintenanceLink vehicleId={v.id} hasOpenAlerts={hasOpenAlerts} />
                       <EditVehicleLink vehicleId={v.id} />
@@ -300,7 +300,7 @@ export default async function FlotaPage({ searchParams }: Props) {
                             isAdmin={isAdmin}
                           />
                           {(v as { status_locked?: boolean }).status_locked && (
-                            <LockBadge adminLabel={isAdmin} />
+                            <LockBadge />
                           )}
                         </div>
                       </td>
