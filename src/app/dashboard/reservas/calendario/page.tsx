@@ -131,56 +131,46 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
   // Pad to complete last row
   while (cells.length % 7 !== 0) cells.push(null)
 
+  // Days with content for mobile list view (skip empty days)
+  const activeDays = Array.from({ length: totalDays }, (_, i) => i + 1)
+
   return (
-    <div className="p-6">
+    <div className="p-4 md:p-6">
       {/* Header */}
-      <div className="flex items-start justify-between mb-5 flex-wrap gap-4">
+      <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div>
-          <Link
-            href="/dashboard/reservas"
-            className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-1"
-          >
+          <Link href="/dashboard/reservas" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-1">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
             </svg>
             Reservas
           </Link>
           <h1 className="text-xl font-semibold text-gray-900 capitalize">{monthName}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {reservations?.length ?? 0} reservas activas
-          </p>
+          <p className="text-sm text-gray-500 mt-0.5">{reservations?.length ?? 0} reservas activas</p>
         </div>
-
-        <div className="flex items-center gap-2">
-          <Link href={`?mes=${prevMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">
-            ← Anterior
-          </Link>
-          <Link href={`?mes=${thisMes}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">
-            Hoy
-          </Link>
-          <Link href={`?mes=${nextMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">
-            Siguiente →
-          </Link>
+        <div className="flex items-center gap-1.5">
+          <Link href={`?mes=${prevMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">←</Link>
+          <Link href={`?mes=${thisMes}`}   className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">Hoy</Link>
+          <Link href={`?mes=${nextMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">→</Link>
         </div>
       </div>
 
       {/* Leyenda */}
-      <div className="flex items-center gap-4 mb-4 flex-wrap">
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
         {Object.entries(STATUS_LABELS).map(([k, label]) => (
           <span key={k} className="flex items-center gap-1.5 text-xs text-gray-500">
-            <span className={`w-2.5 h-2.5 rounded-full ${STATUS_COLORS[k].dot}`} />
+            <span className={`w-2 h-2 rounded-full ${STATUS_COLORS[k].dot}`} />
             {label}
           </span>
         ))}
       </div>
 
-      {/* Grid calendario */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-
-        {/* Encabezado días de semana */}
-        <div className="grid grid-cols-7 border-b border-gray-200">
+      {/* ── DESKTOP: Grid 7 columnas ────────────────────────────────── */}
+      <div className="hidden md:block bg-white border border-gray-200 rounded-xl overflow-hidden">
+        {/* Header días de semana */}
+        <div className="grid grid-cols-7 border-b border-gray-200 bg-gray-50">
           {DOW_LABELS.map((d) => (
-            <div key={d} className={`py-2 text-center text-xs font-medium uppercase tracking-wide ${d === 'Dom' || d === 'Sáb' ? 'text-gray-400' : 'text-gray-500'}`}>
+            <div key={d} className={`py-2.5 text-center text-xs font-semibold uppercase tracking-wider ${d === 'Dom' || d === 'Sáb' ? 'text-gray-400' : 'text-gray-500'}`}>
               {d}
             </div>
           ))}
@@ -189,67 +179,47 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
         {/* Semanas */}
         <div className="grid grid-cols-7 divide-x divide-gray-100">
           {cells.map((cell, i) => {
-            const isLastRow   = i >= cells.length - 7
-            const colIndex    = i % 7
-            const isWeekend   = colIndex === 0 || colIndex === 6
+            const isLastRow = i >= cells.length - 7
+            const colIndex  = i % 7
+            const isWeekend = colIndex === 0 || colIndex === 6
 
             if (!cell) {
               return (
-                <div
-                  key={`blank-${i}`}
-                  className={`min-h-[110px] p-1.5 ${isLastRow ? '' : 'border-b border-gray-100'} ${isWeekend ? 'bg-gray-50/60' : 'bg-gray-50/30'}`}
-                />
+                <div key={`blank-${i}`} className={`min-h-[130px] ${isLastRow ? '' : 'border-b border-gray-100'} ${isWeekend ? 'bg-gray-50/80' : 'bg-gray-50/30'}`} />
               )
             }
 
-            const { day }  = cell
-            const ds       = dayStr(year, month, day)
-            const isToday  = ds === today
-            const rsvs     = byDay[day] ?? []
-            const MAX_SHOW = 3
-            const extra    = rsvs.length - MAX_SHOW
+            const { day } = cell
+            const ds      = dayStr(year, month, day)
+            const isToday = ds === today
+            const rsvs    = byDay[day] ?? []
+            const MAX     = 3
+            const extra   = rsvs.length - MAX
 
             return (
-              <div
-                key={`day-${day}`}
-                className={`min-h-[110px] p-1.5 group relative ${isLastRow ? '' : 'border-b border-gray-100'} ${isToday ? 'bg-blue-50/40' : isWeekend ? 'bg-gray-50/40' : 'bg-white'} hover:bg-gray-50/60 transition-colors`}
-              >
-                {/* Número del día */}
-                <div className="flex items-center justify-between mb-1">
+              <div key={`day-${day}`} className={`min-h-[130px] p-2 group relative ${isLastRow ? '' : 'border-b border-gray-100'} ${isToday ? 'bg-blue-50/50' : isWeekend ? 'bg-gray-50/50' : 'bg-white'} hover:bg-gray-50/80 transition-colors`}>
+                <div className="flex items-center justify-between mb-1.5">
                   <Link
                     href={`/dashboard/reservas/nueva?start=${ds}`}
-                    className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-medium transition-colors ${
-                      isToday
-                        ? 'bg-blue-600 text-white'
-                        : 'text-gray-700 hover:bg-blue-100 hover:text-blue-700'
-                    }`}
-                    title={`Nueva reserva el ${day}`}
+                    className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-semibold transition-colors ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
                   >
                     {day}
                   </Link>
-                  {/* Botón + en hover */}
-                  {!isToday && (
-                    <Link
-                      href={`/dashboard/reservas/nueva?start=${ds}`}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 rounded-full bg-blue-100 hover:bg-blue-200 flex items-center justify-center"
-                      title="Nueva reserva"
-                    >
-                      <svg className="w-3 h-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                      </svg>
-                    </Link>
-                  )}
+                  <Link
+                    href={`/dashboard/reservas/nueva?start=${ds}`}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 rounded-full bg-blue-100 hover:bg-blue-200 flex items-center justify-center"
+                  >
+                    <svg className="w-3 h-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                  </Link>
                 </div>
-
-                {/* Reservas */}
                 <div className="space-y-0.5">
-                  {rsvs.slice(0, MAX_SHOW).map((r) => {
+                  {rsvs.slice(0, MAX).map((r) => {
                     const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
                     return (
-                      <Link
-                        key={r.id}
-                        href={`/dashboard/reservas/${r.id}`}
-                        className={`flex items-center gap-1 w-full px-1.5 py-0.5 rounded text-xs truncate ${col.bg} ${col.text} hover:brightness-95 transition-all`}
+                      <Link key={r.id} href={`/dashboard/reservas/${r.id}`}
+                        className={`flex items-center gap-1 w-full px-1.5 py-0.5 rounded text-xs truncate ${col.bg} ${col.text} hover:brightness-95`}
                         title={`${clientName(r)} · ${vehicleLabel(r)}`}
                       >
                         <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${col.dot}`} />
@@ -257,9 +227,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                       </Link>
                     )
                   })}
-                  {extra > 0 && (
-                    <p className="text-xs text-gray-400 pl-1">+{extra} más</p>
-                  )}
+                  {extra > 0 && <p className="text-xs text-gray-400 pl-1">+{extra} más</p>}
                 </div>
               </div>
             )
@@ -267,7 +235,66 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
         </div>
       </div>
 
-      <p className="text-xs text-gray-400 mt-3 text-center">
+      {/* ── MÓVIL: Lista vertical de días ───────────────────────────── */}
+      <div className="md:hidden space-y-1">
+        {activeDays.map((day) => {
+          const ds      = dayStr(year, month, day)
+          const isToday = ds === today
+          const dow     = new Date(`${ds}T12:00:00Z`).getUTCDay()
+          const dowLabel = DOW_LABELS[dow]
+          const rsvs    = byDay[day] ?? []
+          const hasRsvs = rsvs.length > 0
+
+          return (
+            <div key={day} className={`rounded-xl border ${isToday ? 'border-blue-200 bg-blue-50/40' : hasRsvs ? 'border-gray-200 bg-white' : 'border-transparent bg-transparent'}`}>
+              <div className={`flex items-center gap-3 px-3 py-2 ${!hasRsvs ? 'opacity-50' : ''}`}>
+                {/* Número + día */}
+                <div className="flex-shrink-0 text-center w-10">
+                  <p className="text-xs text-gray-400 uppercase">{dowLabel}</p>
+                  <div className={`w-8 h-8 mx-auto flex items-center justify-center rounded-full text-sm font-semibold ${isToday ? 'bg-blue-600 text-white' : 'text-gray-800'}`}>
+                    {day}
+                  </div>
+                </div>
+
+                {/* Reservas o placeholder */}
+                <div className="flex-1 min-w-0">
+                  {hasRsvs ? (
+                    <div className="space-y-1">
+                      {rsvs.map((r) => {
+                        const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
+                        return (
+                          <Link key={r.id} href={`/dashboard/reservas/${r.id}`}
+                            className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm ${col.bg} ${col.text}`}
+                          >
+                            <span className={`flex-shrink-0 w-2 h-2 rounded-full ${col.dot}`} />
+                            <span className="font-medium truncate">{clientName(r)}</span>
+                            <span className="text-xs opacity-60 truncate hidden sm:block">{vehicleLabel(r)}</span>
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <Link href={`/dashboard/reservas/nueva?start=${ds}`} className="text-xs text-gray-300 hover:text-blue-500 transition-colors">
+                      Sin reservas · + agregar
+                    </Link>
+                  )}
+                </div>
+
+                {/* Botón + en días con reservas */}
+                {hasRsvs && (
+                  <Link href={`/dashboard/reservas/nueva?start=${ds}`} className="flex-shrink-0 w-7 h-7 rounded-full border border-gray-200 hover:bg-blue-50 hover:border-blue-200 flex items-center justify-center transition-colors">
+                    <svg className="w-3.5 h-3.5 text-gray-400 hover:text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                  </Link>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <p className="text-xs text-gray-400 mt-4 text-center hidden md:block">
         Clic en el número del día para crear una reserva · Clic en una reserva para verla
       </p>
     </div>

@@ -170,8 +170,8 @@ export default function Sidebar({ userEmail, userName, userRole }: SidebarProps)
 
   return (
     <>
-      {/* ── Topbar móvil ──────────────────────────────────────────── */}
-      <div className="lg:hidden flex items-center justify-between h-14 px-4 border-b border-gray-200 bg-white">
+      {/* ── Topbar móvil (fixed) ──────────────────────────────────── */}
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-30 flex items-center justify-between h-14 px-4 border-b border-gray-200 bg-white shadow-sm">
         <span className="text-sm font-semibold text-gray-900">Rentflow</span>
         <button
           onClick={() => setMobileOpen(!mobileOpen)}
