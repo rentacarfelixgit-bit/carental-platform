@@ -274,7 +274,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                       })}
                     </div>
                   ) : (
-                    <Link href={`/dashboard/reservas/nueva?start=${ds}`} className="text-xs text-gray-300 hover:text-blue-500 transition-colors">
+                    <Link href={`/dashboard/reservas/nueva?start=${ds}`} className="text-xs text-gray-400 hover:text-blue-500 transition-colors">
                       Sin reservas · + agregar
                     </Link>
                   )}
