@@ -13,6 +13,17 @@ interface Props {
 export default async function NuevaReservaPage({ searchParams }: Props) {
   const { start, end, vehicle } = await searchParams
 
+  // Convertir fecha sola (YYYY-MM-DD) a datetime-local (YYYY-MM-DDTHH:MM)
+  function toDatetime(val?: string, defaultTime = '08:00') {
+    if (!val) return ''
+    if (val.includes('T')) return val          // ya tiene hora
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return `${val}T${defaultTime}`
+    return val
+  }
+
+  const initialStart = toDatetime(start, '08:00')
+  const initialEnd   = toDatetime(end,   '08:00')
+
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
@@ -34,8 +45,8 @@ export default async function NuevaReservaPage({ searchParams }: Props) {
   return (
     <NuevaReservaForm
       clients={clients ?? []}
-      initialStartDate={start ?? ''}
-      initialEndDate={end ?? ''}
+      initialStartDate={initialStart}
+      initialEndDate={initialEnd}
       initialVehicleId={vehicle ?? ''}
     />
   )
