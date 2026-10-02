@@ -1,9 +1,5 @@
 'use client'
 
-// src/app/dashboard/flota/ImportarFlota.tsx
-// Modal para importar vehículos desde un archivo Excel
-// Usa SheetJS desde CDN — no requiere instalación adicional
-
 import { useRef, useState, useTransition, useEffect } from 'react'
 import { importVehicles } from './actions'
 
@@ -198,8 +194,16 @@ export default function ImportarFlota() {
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                 <p className="text-sm font-medium text-blue-900 mb-1">Formato requerido</p>
                 <p className="text-sm text-blue-700 mb-3">
-                  Para importar correctamente usa nuestra plantilla. Incluye instrucciones, columnas exactas y una fila de ejemplo.
+                  Para importar correctamente usa nuestra plantilla. Incluye instrucciones, columnas exactas y una fila de ejemplo en la fila 5.
                 </p>
+                <div className="flex items-start gap-2 bg-blue-100 rounded-lg px-3 py-2 mb-3">
+                  <svg className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                  </svg>
+                  <p className="text-xs text-blue-800">
+                    La <strong>fila 5 es un ejemplo</strong> — reemplázala o bórrala antes de importar. Si la dejas, será ignorada automáticamente al importar.
+                  </p>
+                </div>
                 <a
                   href="/templates/plantilla-flota.xlsx"
                   download="plantilla-flota.xlsx"

@@ -297,6 +297,13 @@ export async function importVehicles(rows: Record<string, string>[]) {
     const requiredEmpty = !raw.brand && !raw.model && !raw.plates
     if (requiredEmpty) { skipped++; continue }
 
+    // Saltar la fila de ejemplo de la plantilla
+    const isExampleRow =
+      raw.brand?.toLowerCase() === 'toyota' &&
+      raw.model?.toLowerCase() === 'corolla' &&
+      raw.plates?.toUpperCase() === 'ABC-1234'
+    if (isExampleRow) { skipped++; continue }
+
     const parsed = ImportRowSchema.safeParse(raw)
     if (!parsed.success) {
       const msgs = parsed.error.issues.map((e: { message: string }) => e.message).join(', ')
