@@ -61,6 +61,7 @@ export async function getAvailableVehicles(startDate: string, endDate: string) {
     .select('id, plates, brand, model, year, color, daily_rate')
     .eq('tenant_id', ctx.tenantId)
     .eq('active', true)
+    .not('status', 'in', '("maintenance","retained")')  // bloqueados físicamente
     .order('brand')
 
   if (excludeIds.length > 0) {
@@ -153,12 +154,13 @@ export async function createReservation(
     await ctx.supabase.from('reservation_extras').insert(extrasToInsert)
   }
 
-  // Marcar el vehículo como reservado desde que se crea la reserva
+  // Marcar el vehículo como reservado — solo si no tiene estado fijado manualmente por admin
   await ctx.supabase
     .from('vehicles')
     .update({ status: 'reserved', updated_at: new Date().toISOString() })
     .eq('id', vehicle_id)
     .eq('tenant_id', ctx.tenantId)
+    .eq('status_locked', false)
 
   revalidatePath('/dashboard/reservas')
   revalidatePath('/dashboard/flota')
@@ -239,6 +241,7 @@ export async function changeReservationStatus(reservationId: string, newStatus: 
       .update({ status: vehicleStatus, updated_at: new Date().toISOString() })
       .eq('id', fullRes.vehicle_id)
       .eq('tenant_id', ctx.tenantId)
+      .eq('status_locked', false)  // no pisar estado fijado manualmente por admin
   }
 
   revalidatePath('/dashboard/reservas')

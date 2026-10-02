@@ -185,20 +185,167 @@ export async function updateVehicle(
 
 // ── Cambiar estado ────────────────────────────────────────────────────────────
 
+// Statuses que solo el admin puede asignar (flujo automático de reservas)
+const SYSTEM_STATUSES = ['available', 'reserved', 'in_use']
+
 export async function changeVehicleStatus(vehicleId: string, status: string) {
-  const tenantId = await getTenantId()
-  if (!tenantId) return { error: 'No autorizado' }
+  const userInfo = await getTenantAndRole()
+  if (!userInfo) return { error: 'No autorizado' }
+
+  // Operadores solo pueden poner mantenimiento o retenido
+  if (!isAdmin(userInfo.role) && SYSTEM_STATUSES.includes(status)) {
+    return { error: 'Solo los administradores pueden asignar ese estado.' }
+  }
 
   const supabase = await createClient()
+
+  // status_locked = true cuando se fija manualmente (cualquier estado excepto disponible devuelto por admin)
+  // Cuando el admin pone "disponible" se libera el lock para que el sistema retome el control
+  const statusLocked = status !== 'available'
+
   const { error } = await supabase
     .from('vehicles')
-    .update({ status, updated_at: new Date().toISOString() })
+    .update({ status, status_locked: statusLocked, updated_at: new Date().toISOString() })
     .eq('id', vehicleId)
-    .eq('tenant_id', tenantId)
+    .eq('tenant_id', userInfo.tenantId)
 
   if (error) return { error: error.message }
   revalidatePath('/dashboard/flota')
   return { success: true }
+}
+
+// Verifica si un vehículo tiene una reserva activa (para el warning del admin)
+export async function checkVehicleActiveReservation(vehicleId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { data: profile } = await supabase
+    .from('users').select('tenant_id').eq('id', user.id).single()
+  if (!profile?.tenant_id) return null
+
+  const { data } = await supabase
+    .from('reservations')
+    .select('id, status, start_date, end_date, clients(full_name)')
+    .eq('tenant_id', profile.tenant_id)
+    .eq('vehicle_id', vehicleId)
+    .not('status', 'in', '("cancelled","completed")')
+    .order('start_date')
+    .limit(1)
+    .maybeSingle() as {
+      data: {
+        id: string; status: string; start_date: string; end_date: string
+        clients: { full_name: string } | { full_name: string }[] | null
+      } | null
+    }
+
+  if (!data) return null
+
+  const clientObj = Array.isArray(data.clients) ? data.clients[0] : data.clients
+  return {
+    id:           data.id,
+    status:       data.status,
+    start_date:   data.start_date,
+    end_date:     data.end_date,
+    client_name:  clientObj?.full_name ?? '—',
+  }
+}
+
+// ── Importar flota desde Excel ───────────────────────────────────────────────
+
+const currentYearForImport = new Date().getFullYear()
+
+const ImportRowSchema = z.object({
+  brand:            z.string().trim().min(1),
+  model:            z.string().trim().min(1),
+  year:             z.coerce.number().int().min(1990).max(currentYearForImport + 1),
+  color:            z.string().trim().min(1),
+  plates:           z.string().trim()
+    .min(5).max(20)
+    .regex(/^[A-Za-z0-9\-\*]+$/)
+    .transform(v => v.toUpperCase()),
+  daily_rate:       z.coerce.number().positive(),
+  vin:              z.string().max(17).optional(),
+  insurance_policy: z.string().max(100).optional(),
+  insurance_expiry: z.string().optional(),
+  permit_expiry:    z.string().optional(),
+  notes:            z.string().max(2000).optional(),
+})
+
+export async function importVehicles(rows: Record<string, string>[]) {
+  const tenantId = await getTenantId()
+  if (!tenantId) return { imported: 0, skipped: 0, errors: [{ row: 0, reason: 'No autorizado' }] }
+
+  const supabase = await createClient()
+
+  // Placas existentes en el tenant (para evitar duplicados)
+  const { data: existing } = await supabase
+    .from('vehicles')
+    .select('plates')
+    .eq('tenant_id', tenantId)
+  const existingPlates = new Set((existing ?? []).map(v => v.plates.toUpperCase()))
+
+  let imported = 0
+  let skipped  = 0
+  const errors: { row: number; reason: string }[] = []
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowNum = i + 6  // offset: plantilla empieza en fila 6
+    const raw = rows[i]
+
+    // Saltar filas totalmente vacías
+    const requiredEmpty = !raw.brand && !raw.model && !raw.plates
+    if (requiredEmpty) { skipped++; continue }
+
+    const parsed = ImportRowSchema.safeParse(raw)
+    if (!parsed.success) {
+      const msgs = parsed.error.issues.map((e: { message: string }) => e.message).join(', ')
+      errors.push({ row: rowNum, reason: msgs })
+      continue
+    }
+
+    const d = parsed.data
+
+    // Verificar placa duplicada
+    if (existingPlates.has(d.plates)) {
+      errors.push({ row: rowNum, reason: `Placas "${d.plates}" ya existen en la flota` })
+      skipped++
+      continue
+    }
+
+    const { error } = await supabase.from('vehicles').insert({
+      tenant_id:        tenantId,
+      brand:            d.brand,
+      model:            d.model,
+      year:             d.year,
+      color:            d.color,
+      plates:           d.plates,
+      daily_rate:       d.daily_rate,
+      vin:              d.vin || null,
+      insurance_policy: d.insurance_policy || null,
+      insurance_expiry: d.insurance_expiry || null,
+      permit_expiry:    d.permit_expiry || null,
+      notes:            d.notes || null,
+      status:           'available',
+      active:           true,
+      updated_at:       new Date().toISOString(),
+    })
+
+    if (error) {
+      if (error.code === '23505') {
+        errors.push({ row: rowNum, reason: `Placas "${d.plates}" ya existen en la flota` })
+        skipped++
+      } else {
+        errors.push({ row: rowNum, reason: error.message })
+      }
+    } else {
+      existingPlates.add(d.plates)
+      imported++
+    }
+  }
+
+  if (imported > 0) revalidatePath('/dashboard/flota')
+  return { imported, skipped, errors }
 }
 
 // ── Activar / desactivar ──────────────────────────────────────────────────────

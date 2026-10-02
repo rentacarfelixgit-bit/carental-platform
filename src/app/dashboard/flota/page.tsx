@@ -5,6 +5,7 @@ import ClearFiltersLink from './ClearFiltersLink'
 import EditVehicleLink from './EditVehicleLink'
 import MaintenanceLink from './MaintenanceLink'
 import VehicleStatusSelect from './VehicleStatusSelect'
+import ImportarFlota from './ImportarFlota'
 
 const PAGE_SIZE = 20
 
@@ -16,7 +17,30 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   retained:    { label: 'Retenido',      className: 'bg-red-100 text-red-700' },
 }
 
-const ALL_STATUSES = Object.entries(STATUS_CONFIG).map(([value, { label }]) => ({ value, label }))
+// 'reserved' lo gestiona el sistema automáticamente — no aparece en ningún dropdown manual
+const ALL_STATUSES = Object.entries(STATUS_CONFIG)
+  .filter(([value]) => value !== 'reserved')
+  .map(([value, { label }]) => ({ value, label }))
+
+// Operadores solo pueden marcar mantenimiento o retenido
+const OPERATOR_STATUSES = [
+  { value: 'maintenance', label: 'Mantenimiento' },
+  { value: 'retained',    label: 'Retenido' },
+]
+
+function LockBadge({ adminLabel }: { adminLabel: boolean }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-md bg-purple-100 text-purple-700"
+      title={adminLabel ? 'Estado fijado manualmente — no se actualizará automáticamente' : 'Estado fijado por un administrador'}
+    >
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+      </svg>
+      {adminLabel ? 'Fijado' : 'Admin'}
+    </span>
+  )
+}
 
 function getPageNumbers(current: number, total: number): (number | '...')[] {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -44,16 +68,18 @@ export default async function FlotaPage({ searchParams }: Props) {
 
   const { data: profile } = await supabase
     .from('users')
-    .select('tenant_id')
+    .select('tenant_id, role')
     .eq('id', user.id)
     .single()
 
   if (!profile?.tenant_id) redirect('/login')
 
+  const isAdmin = profile.role === 'admin' || profile.role === 'superadmin'
+
   // Construir query con filtros + paginación
   let query = supabase
     .from('vehicles')
-    .select('id, plates, brand, model, year, color, status, active, insurance_expiry, permit_expiry', { count: 'exact' })
+    .select('id, plates, brand, model, year, color, status, status_locked, active, insurance_expiry, permit_expiry', { count: 'exact' })
     .eq('tenant_id', profile.tenant_id)
     .order('created_at', { ascending: false })
     .range(from, to)
@@ -104,15 +130,7 @@ export default async function FlotaPage({ searchParams }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Link
-            href="/dashboard/flota/calendario"
-            className="inline-flex items-center gap-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5m-9-6h.008v.008H12v-.008zM12 15h.008v.008H12V15zm0 2.25h.008v.008H12v-.008zM9.75 15h.008v.008H9.75V15zm0 2.25h.008v.008H9.75v-.008zM7.5 15h.008v.008H7.5V15zm0 2.25h.008v.008H7.5v-.008zm6.75-4.5h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008V15zm0 2.25h.008v.008h-.008v-.008zm2.25-4.5h.008v.008H16.5v-.008zm0 2.25h.008v.008H16.5V15z" />
-            </svg>
-            Calendario
-          </Link>
+          <ImportarFlota />
           <Link
             href="/dashboard/flota/bloqueos"
             className="inline-flex items-center gap-2 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
@@ -198,8 +216,17 @@ export default async function FlotaPage({ searchParams }: Props) {
                         {statusCfg.label}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <VehicleStatusSelect vehicleId={v.id} currentStatus={v.status} statuses={ALL_STATUSES} statusConfig={STATUS_CONFIG} />
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <VehicleStatusSelect
+                        vehicleId={v.id}
+                        currentStatus={v.status}
+                        statuses={isAdmin ? ALL_STATUSES : OPERATOR_STATUSES}
+                        statusConfig={STATUS_CONFIG}
+                        isAdmin={isAdmin}
+                      />
+                      {(v as { status_locked?: boolean }).status_locked && (
+                        <LockBadge adminLabel={isAdmin} />
+                      )}
                       <MaintenanceLink vehicleId={v.id} hasOpenAlerts={hasOpenAlerts} />
                       <EditVehicleLink vehicleId={v.id} />
                     </div>
@@ -245,7 +272,18 @@ export default async function FlotaPage({ searchParams }: Props) {
                       </td>
                       <td className="px-4 py-3 font-mono text-sm text-gray-700">{v.plates}</td>
                       <td className="px-4 py-3">
-                        <VehicleStatusSelect vehicleId={v.id} currentStatus={v.status} statuses={ALL_STATUSES} statusConfig={STATUS_CONFIG} />
+                        <div className="flex items-center gap-2">
+                          <VehicleStatusSelect
+                            vehicleId={v.id}
+                            currentStatus={v.status}
+                            statuses={isAdmin ? ALL_STATUSES : OPERATOR_STATUSES}
+                            statusConfig={STATUS_CONFIG}
+                            isAdmin={isAdmin}
+                          />
+                          {(v as { status_locked?: boolean }).status_locked && (
+                            <LockBadge adminLabel={isAdmin} />
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         {v.insurance_expiry ? (
