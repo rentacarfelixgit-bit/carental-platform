@@ -36,19 +36,42 @@ export default async function ReservaDetailPage({ params }: Props) {
 
   const isAdmin = profile.role === 'admin'
 
-  const { data: reservation } = await supabase
-    .from('reservations')
-    .select(`
-      id, start_date, end_date, status, notes, created_at, confirmed_at,
-      clients ( id, full_name, id_number, phone, email, license_number, passport_number, address, city, state, zip_code, local_phone, local_address ),
-      vehicles ( id, plates, brand, model, year, color ),
-      reservation_extras ( id, extra_type, description )
-    `)
-    .eq('id', id)
-    .eq('tenant_id', profile.tenant_id)
-    .single()
+  const [
+    { data: reservation },
+    { data: checkoutInspection },
+    { data: checkinInspection },
+  ] = await Promise.all([
+    supabase
+      .from('reservations')
+      .select(`
+        id, start_date, end_date, status, notes, created_at, confirmed_at,
+        clients ( id, full_name, id_number, phone, email, license_number, passport_number, address, city, state, zip_code, local_phone, local_address ),
+        vehicles ( id, plates, brand, model, year, color ),
+        reservation_extras ( id, extra_type, description )
+      `)
+      .eq('id', id)
+      .eq('tenant_id', profile.tenant_id)
+      .single(),
+    supabase
+      .from('inspections')
+      .select('id')
+      .eq('reservation_id', id)
+      .eq('tenant_id', profile.tenant_id)
+      .eq('type', 'checkout')
+      .maybeSingle(),
+    supabase
+      .from('inspections')
+      .select('id')
+      .eq('reservation_id', id)
+      .eq('tenant_id', profile.tenant_id)
+      .eq('type', 'checkin')
+      .maybeSingle(),
+  ])
 
   if (!reservation) redirect('/dashboard/reservas')
+
+  const hasCheckout = !!checkoutInspection
+  const hasCheckin  = !!checkinInspection
 
   const client  = reservation.clients  as unknown as {
     id: string; full_name: string; id_number: string; phone: string | null; email: string | null;
@@ -88,6 +111,8 @@ export default async function ReservaDetailPage({ params }: Props) {
           reservationId={reservation.id}
           currentStatus={reservation.status}
           isAdmin={isAdmin}
+          hasCheckout={hasCheckout}
+          hasCheckin={hasCheckin}
         />
         <Link
           href={`/dashboard/reservas/${reservation.id}/inspecciones`}

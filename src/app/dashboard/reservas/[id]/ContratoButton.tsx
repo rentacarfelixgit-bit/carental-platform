@@ -47,8 +47,8 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
   )
 }
 
-function TextInput({ value, onChange, placeholder, disabled }: {
-  value: string; onChange: (v: string) => void; placeholder?: string; disabled?: boolean
+function TextInput({ value, onChange, placeholder, disabled, maxLength }: {
+  value: string; onChange: (v: string) => void; placeholder?: string; disabled?: boolean; maxLength?: number
 }) {
   return (
     <input
@@ -57,6 +57,7 @@ function TextInput({ value, onChange, placeholder, disabled }: {
       onChange={e => onChange(e.target.value)}
       placeholder={placeholder}
       disabled={disabled}
+      maxLength={maxLength}
       className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50"
     />
   )
@@ -228,25 +229,25 @@ export default function ContratoButton({ reservationId, client }: Props) {
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Dirección del cliente</h3>
                 <p className="text-xs text-gray-400">Estos datos se guardarán en el perfil del cliente.</p>
                 <FieldRow label="Dirección">
-                  <TextInput value={address} onChange={setAddress} placeholder="Calle / Av., #123" disabled={pending} />
+                  <TextInput value={address} onChange={setAddress} placeholder="Calle / Av., #123" disabled={pending} maxLength={200} />
                 </FieldRow>
                 <div className="grid grid-cols-3 gap-3">
                   <FieldRow label="Ciudad">
-                    <TextInput value={city} onChange={setCity} placeholder="Santiago" disabled={pending} />
+                    <TextInput value={city} onChange={setCity} placeholder="Santiago" disabled={pending} maxLength={80} />
                   </FieldRow>
                   <FieldRow label="Estado / Provincia">
-                    <TextInput value={clientState} onChange={setClientState} placeholder="Santiago" disabled={pending} />
+                    <TextInput value={clientState} onChange={setClientState} placeholder="Santiago" disabled={pending} maxLength={80} />
                   </FieldRow>
                   <FieldRow label="ZIP Code">
-                    <TextInput value={zipCode} onChange={setZipCode} placeholder="51000" disabled={pending} />
+                    <TextInput value={zipCode} onChange={setZipCode} placeholder="51000" disabled={pending} maxLength={20} />
                   </FieldRow>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <FieldRow label="Teléfono de contacto local">
-                    <TextInput value={localPhone} onChange={setLocalPhone} placeholder="809-000-0000" disabled={pending} />
+                    <TextInput value={localPhone} onChange={setLocalPhone} placeholder="809-000-0000" disabled={pending} maxLength={30} />
                   </FieldRow>
                   <FieldRow label="Dirección local">
-                    <TextInput value={localAddress} onChange={setLocalAddress} placeholder="Hotel / Airbnb..." disabled={pending} />
+                    <TextInput value={localAddress} onChange={setLocalAddress} placeholder="Hotel / Airbnb..." disabled={pending} maxLength={200} />
                   </FieldRow>
                 </div>
               </section>
@@ -256,14 +257,14 @@ export default function ContratoButton({ reservationId, client }: Props) {
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Detalles del contrato</h3>
                 <div className="grid grid-cols-2 gap-3">
                   <FieldRow label="Folio del depósito">
-                    <TextInput value={folio} onChange={setFolio} placeholder="F-001" disabled={pending} />
+                    <TextInput value={folio} onChange={setFolio} placeholder="F-001" disabled={pending} maxLength={50} />
                   </FieldRow>
                   <FieldRow label="Número de aprobación">
-                    <TextInput value={aprobacion} onChange={setAprobacion} placeholder="APR-00001" disabled={pending} />
+                    <TextInput value={aprobacion} onChange={setAprobacion} placeholder="APR-00001" disabled={pending} maxLength={50} />
                   </FieldRow>
                 </div>
                 <FieldRow label="Preparado por">
-                  <TextInput value={preparadoPor} onChange={setPreparadoPor} placeholder="Nombre del agente" disabled={pending} />
+                  <TextInput value={preparadoPor} onChange={setPreparadoPor} placeholder="Nombre del agente" disabled={pending} maxLength={100} />
                 </FieldRow>
                 <FieldRow label="Forma de pago">
                   <div className="flex gap-4 mt-1">
@@ -295,16 +296,16 @@ export default function ContratoButton({ reservationId, client }: Props) {
                 <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Conductores adicionales</h3>
                 <div className="grid grid-cols-2 gap-3">
                   <FieldRow label="Conductor 1 — Licencia">
-                    <TextInput value={d1Lic} onChange={setD1Lic} placeholder="L-12345678" disabled={pending} />
+                    <TextInput value={d1Lic} onChange={setD1Lic} placeholder="L-12345678" disabled={pending} maxLength={30} />
                   </FieldRow>
                   <FieldRow label="Conductor 1 — Teléfono">
-                    <TextInput value={d1Tel} onChange={setD1Tel} placeholder="809-000-0000" disabled={pending} />
+                    <TextInput value={d1Tel} onChange={setD1Tel} placeholder="809-000-0000" disabled={pending} maxLength={30} />
                   </FieldRow>
                   <FieldRow label="Conductor 2 — Licencia">
-                    <TextInput value={d2Lic} onChange={setD2Lic} placeholder="L-12345678" disabled={pending} />
+                    <TextInput value={d2Lic} onChange={setD2Lic} placeholder="L-12345678" disabled={pending} maxLength={30} />
                   </FieldRow>
                   <FieldRow label="Conductor 2 — Teléfono">
-                    <TextInput value={d2Tel} onChange={setD2Tel} placeholder="809-000-0000" disabled={pending} />
+                    <TextInput value={d2Tel} onChange={setD2Tel} placeholder="809-000-0000" disabled={pending} maxLength={30} />
                   </FieldRow>
                 </div>
                 <div className="flex items-center gap-6">
@@ -356,9 +357,11 @@ export default function ContratoButton({ reservationId, client }: Props) {
                             <input
                               type="text"
                               value={insPrice[k]}
-                              onChange={e => setPrice(k, e.target.value)}
+                              onChange={e => setPrice(k, e.target.value.replace(/[^0-9.]/g, '').slice(0, 10))}
                               placeholder="0.00"
                               disabled={pending}
+                              maxLength={10}
+                              inputMode="decimal"
                               className="w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
                             />
                           </td>
@@ -393,9 +396,11 @@ export default function ContratoButton({ reservationId, client }: Props) {
                           <input
                             type="text"
                             value={insPrice['bas']}
-                            onChange={e => setPrice('bas', e.target.value)}
+                            onChange={e => setPrice('bas', e.target.value.replace(/[^0-9.]/g, '').slice(0, 10))}
                             placeholder="0.00"
                             disabled={pending}
+                            maxLength={10}
+                            inputMode="decimal"
                             className="w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
                           />
                         </td>
@@ -405,9 +410,11 @@ export default function ContratoButton({ reservationId, client }: Props) {
                             <input
                               type="text"
                               value={insPrice['deduct_bas']}
-                              onChange={e => setPrice('deduct_bas', e.target.value)}
+                              onChange={e => setPrice('deduct_bas', e.target.value.replace(/[^0-9.]/g, '').slice(0, 10))}
                               placeholder="0.00"
                               disabled={pending}
+                              maxLength={10}
+                              inputMode="decimal"
                               className="flex-1 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 text-xs"
                             />
                           </div>

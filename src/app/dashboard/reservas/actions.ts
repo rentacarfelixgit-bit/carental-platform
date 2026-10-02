@@ -7,6 +7,7 @@ import { checkClientBlacklist } from '@/lib/checkBlacklist'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
+import { randomUUID } from 'crypto'
 
 export type ReservationFormState = {
   error?: string
@@ -246,6 +247,89 @@ export async function changeReservationStatus(reservationId: string, newStatus: 
 
   revalidatePath('/dashboard/reservas')
   revalidatePath(`/dashboard/reservas/${reservationId}`)
+  revalidatePath('/dashboard/flota')
+  return { success: true }
+}
+
+// ── Inspección rápida (sin fotos) + cambio de estado ─────────────────────────
+// Usado cuando el usuario elige "continuar sin nuevas fotos" al marcar en curso/completada.
+
+const VALID_FUEL_QUICK = ['full', 'three_quarters', 'half', 'quarter', 'empty'] as const
+
+export async function createQuickInspection(
+  reservationId: string,
+  type: 'checkout' | 'checkin',
+  odometer: number,
+  fuelLevel: string,
+): Promise<{ error?: string; success?: boolean }> {
+  const ctx = await getContext()
+  if (!ctx) return { error: 'No autorizado' }
+
+  if (!(VALID_FUEL_QUICK as readonly string[]).includes(fuelLevel))
+    return { error: 'Nivel de combustible inválido' }
+  if (!Number.isInteger(odometer) || odometer <= 0)
+    return { error: 'El odómetro debe ser un número entero positivo' }
+
+  // Verificar que la reserva pertenece al tenant
+  const { data: reservation } = await ctx.supabase
+    .from('reservations')
+    .select('status, vehicle_id')
+    .eq('id', reservationId)
+    .eq('tenant_id', ctx.tenantId)
+    .single()
+
+  if (!reservation) return { error: 'Reserva no encontrada' }
+  if (reservation.status === 'cancelled') return { error: 'No se pueden agregar inspecciones a reservas canceladas' }
+
+  // Insertar inspección sin fotos
+  const { error: insErr } = await ctx.supabase.from('inspections').insert({
+    id:             randomUUID(),
+    reservation_id: reservationId,
+    tenant_id:      ctx.tenantId,
+    type,
+    odometer,
+    fuel_level:     fuelLevel,
+    inspector_id:   ctx.user.id,
+  })
+
+  if (insErr) {
+    // 23505 = unique constraint: ya existe inspección de este tipo
+    if (insErr.code === '23505') {
+      // Si ya existe, actualizar odómetro y combustible
+      await ctx.supabase
+        .from('inspections')
+        .update({ odometer, fuel_level: fuelLevel })
+        .eq('reservation_id', reservationId)
+        .eq('tenant_id', ctx.tenantId)
+        .eq('type', type)
+    } else {
+      return { error: insErr.message }
+    }
+  }
+
+  // Sincronizar estados (misma lógica que changeReservationStatus)
+  const newStatus: AllowedStatus = type === 'checkout' ? 'active' : 'completed'
+  const vehicleStatus            = type === 'checkout' ? 'in_use' : 'available'
+
+  await Promise.all([
+    ctx.supabase
+      .from('reservations')
+      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .eq('id', reservationId)
+      .eq('tenant_id', ctx.tenantId),
+    reservation.vehicle_id
+      ? ctx.supabase
+          .from('vehicles')
+          .update({ status: vehicleStatus, updated_at: new Date().toISOString() })
+          .eq('id', reservation.vehicle_id)
+          .eq('tenant_id', ctx.tenantId)
+          .eq('status_locked', false)
+      : Promise.resolve(),
+  ])
+
+  revalidatePath('/dashboard/reservas')
+  revalidatePath(`/dashboard/reservas/${reservationId}`)
+  revalidatePath(`/dashboard/reservas/${reservationId}/inspecciones`)
   revalidatePath('/dashboard/flota')
   return { success: true }
 }

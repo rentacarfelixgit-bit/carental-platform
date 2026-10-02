@@ -298,12 +298,16 @@ export async function saveClientAddress(
   const ctx = await getContext()
   if (!ctx) return { error: 'No autorizado' }
 
-  const address      = (formData.get('address')       as string)?.trim() || null
-  const city         = (formData.get('city')           as string)?.trim() || null
-  const state_       = (formData.get('state')          as string)?.trim() || null
-  const zip_code     = (formData.get('zip_code')       as string)?.trim() || null
-  const local_phone  = (formData.get('local_phone')    as string)?.trim() || null
-  const local_address = (formData.get('local_address') as string)?.trim() || null
+  const cap = (key: string, max: number) => {
+    const v = (formData.get(key) as string | null)?.trim() ?? ''
+    return v.slice(0, max) || null
+  }
+  const address      = cap('address',       200)
+  const city         = cap('city',           80)
+  const state_       = cap('state',          80)
+  const zip_code     = cap('zip_code',       20)
+  const local_phone  = cap('local_phone',    30)
+  const local_address = cap('local_address', 200)
 
   const { error } = await ctx.supabase
     .from('clients')

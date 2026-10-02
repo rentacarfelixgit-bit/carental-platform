@@ -84,25 +84,29 @@ function InsuranceRow({ label, price, status }: { label: string; price?: string;
 export default async function ContratoPrintPage({ params, searchParams }: Props) {
   const { id } = await params
   const sp = await searchParams
-  // Helper para leer un param de string
-  const p = (key: string) => { const v = sp[key]; return typeof v === 'string' ? v : '' }
+  // Helper para leer un param de string y truncarlo por seguridad de layout
+  const p = (key: string, max = 200) => {
+    const v = sp[key]
+    const s = typeof v === 'string' ? v : ''
+    return s.slice(0, max)
+  }
   // Datos del modal que llegan por URL
-  const spFolio        = p('folio')
-  const spAprobacion   = p('aprobacion')
-  const spPreparadoPor = p('preparado_por')
-  const spPago         = p('pago') // 'efectivo' | 'tarjeta' | ''
-  const spD1Lic        = p('d1_lic')
-  const spD1Tel        = p('d1_tel')
-  const spD2Lic        = p('d2_lic')
-  const spD2Tel        = p('d2_tel')
-  const spEdad         = p('edad')
-  const spMascotas     = p('mascotas') === '1'
-  const spAddress      = p('address')
-  const spCity         = p('city')
-  const spState        = p('state')
-  const spZip          = p('zip_code')
-  const spLocalPhone   = p('local_phone')
-  const spLocalAddress = p('local_address')
+  const spFolio        = p('folio',        50)
+  const spAprobacion   = p('aprobacion',   50)
+  const spPreparadoPor = p('preparado_por',100)
+  const spPago         = p('pago',         10) // 'efectivo' | 'tarjeta'
+  const spD1Lic        = p('d1_lic',       30)
+  const spD1Tel        = p('d1_tel',       30)
+  const spD2Lic        = p('d2_lic',       30)
+  const spD2Tel        = p('d2_tel',       30)
+  const spEdad         = p('edad',          3)
+  const spMascotas     = p('mascotas',      1) === '1'
+  const spAddress      = p('address',     200)
+  const spCity         = p('city',         80)
+  const spState        = p('state',        80)
+  const spZip          = p('zip_code',     20)
+  const spLocalPhone   = p('local_phone',  30)
+  const spLocalAddress = p('local_address',200)
   type InsStatus = 'a' | 'd' | ''
   const ins = (key: string): InsStatus => { const v = p(key); return (v === 'a' || v === 'd') ? v : '' }
   const segCdw = ins('seg_cdw')
@@ -111,13 +115,13 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const segAt  = ins('seg_at')
   const segPkg = ins('seg_pkg')
   const segBas = ins('seg_bas')
-  const priceCdw    = p('price_cdw')
-  const priceLia    = p('price_lia')
-  const priceTw     = p('price_tw')
-  const priceAt     = p('price_at')
-  const pricePkg    = p('price_pkg')
-  const priceBas    = p('price_bas')
-  const deductBas   = p('deduct_bas')
+  const priceCdw  = p('price_cdw',  12)
+  const priceLia  = p('price_lia',  12)
+  const priceTw   = p('price_tw',   12)
+  const priceAt   = p('price_at',   12)
+  const pricePkg  = p('price_pkg',  12)
+  const priceBas  = p('price_bas',  12)
+  const deductBas = p('deduct_bas', 12)
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
