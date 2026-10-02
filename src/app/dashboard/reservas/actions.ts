@@ -102,18 +102,32 @@ export async function createReservation(
   const ctx = await getContext()
   if (!ctx) return { error: 'No autorizado' }
 
-  // Verificar disponibilidad del vehículo (sin solapamiento)
-  const { count } = await ctx.supabase
-    .from('reservations')
-    .select('id', { count: 'exact', head: true })
-    .eq('tenant_id', ctx.tenantId)
-    .eq('vehicle_id', vehicle_id)
-    .not('status', 'in', '("cancelled","completed")')
-    .lt('start_date', end_date)
-    .gt('end_date', start_date)
+  // Verificar disponibilidad del vehículo y del cliente en paralelo
+  const [{ count: vehicleCount }, { count: clientCount }] = await Promise.all([
+    ctx.supabase
+      .from('reservations')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', ctx.tenantId)
+      .eq('vehicle_id', vehicle_id)
+      .not('status', 'in', '("cancelled","completed")')
+      .lt('start_date', end_date)
+      .gt('end_date', start_date),
+    ctx.supabase
+      .from('reservations')
+      .select('id', { count: 'exact', head: true })
+      .eq('tenant_id', ctx.tenantId)
+      .eq('client_id', client_id)
+      .not('status', 'in', '("cancelled","completed")')
+      .lt('start_date', end_date)
+      .gt('end_date', start_date),
+  ])
 
-  if (count && count > 0) {
+  if (vehicleCount && vehicleCount > 0) {
     return { fieldErrors: { vehicle_id: ['El vehículo no está disponible para esas fechas'] } }
+  }
+
+  if (clientCount && clientCount > 0) {
+    return { fieldErrors: { client_id: ['Este cliente ya tiene una reserva activa en esas fechas'] } }
   }
 
   // Insertar reserva
