@@ -4,6 +4,7 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import ClientesSearch from './ClientesSearch'
 
 const ID_TYPE_LABELS: Record<string, string> = {
   license:  'Licencia',
@@ -112,33 +113,7 @@ export default async function ClientesPage({ searchParams }: Props) {
       </div>
 
       {/* Búsqueda */}
-      <form
-        method="GET"
-        className="flex gap-3 mb-5"
-        onSubmit={(e) => {
-          const btn = (e.currentTarget as HTMLFormElement).querySelector('button[type="submit"]') as HTMLButtonElement | null
-          if (btn) { btn.disabled = true; btn.textContent = 'Buscando…' }
-        }}
-      >
-        <input
-          name="q"
-          defaultValue={q}
-          placeholder="Buscar por nombre, ID, teléfono o email..."
-          className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          maxLength={100}
-        />
-        <button
-          type="submit"
-          className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60"
-        >
-          Buscar
-        </button>
-        {q && (
-          <Link href="/dashboard/clientes" className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">
-            Limpiar
-          </Link>
-        )}
-      </form>
+      <ClientesSearch defaultValue={q} />
 
       {/* Tabla */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
