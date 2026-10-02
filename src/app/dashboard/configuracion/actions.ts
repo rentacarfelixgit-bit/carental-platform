@@ -91,3 +91,35 @@ export async function saveVehicleRate(vehicleId: string, dailyRate: number) {
   revalidatePath('/dashboard/configuracion')
   return { success: true }
 }
+
+// ── Guardar tarifas de múltiples vehículos ────────────────────────────────────
+export async function saveAllVehicleRates(
+  entries: { vehicleId: string; dailyRate: number }[]
+): Promise<{ success?: boolean; error?: string; failed?: string[] }> {
+  if (entries.length === 0) return { success: true }
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autenticado' }
+
+  const { data: profile } = await supabase
+    .from('users').select('tenant_id, role').eq('id', user.id).single()
+  if (!profile || (profile.role !== 'admin' && profile.role !== 'superadmin'))
+    return { error: 'Sin permisos' }
+
+  const results = await Promise.all(
+    entries.map(({ vehicleId, dailyRate }) =>
+      supabase
+        .from('vehicles')
+        .update({ daily_rate: dailyRate, updated_at: new Date().toISOString() })
+        .eq('id', vehicleId)
+        .eq('tenant_id', profile.tenant_id)
+        .then(({ error }) => ({ vehicleId, error }))
+    )
+  )
+
+  const failed = results.filter(r => r.error).map(r => r.vehicleId)
+  revalidatePath('/dashboard/configuracion')
+  if (failed.length > 0) return { error: `${failed.length} tarifa(s) no pudieron guardarse.`, failed }
+  return { success: true }
+}
