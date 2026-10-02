@@ -5,27 +5,27 @@ import { importVehicles } from './actions'
 
 interface ImportResult {
   imported: number
-  skipped:  number
-  errors:   { row: number; reason: string }[]
+  skipped: number
+  errors: { row: number; reason: string }[]
 }
 
 // Mapeo de encabezados del Excel a campos internos
 const COL_MAP: Record<string, string> = {
-  'marca':                  'brand',
-  'modelo':                 'model',
-  'año':                    'year',
-  'color':                  'color',
-  'placas':                 'plates',
-  'tarifa diaria':          'daily_rate',
-  'tarifa diaria (rd$)':    'daily_rate',
-  'vin':                    'vin',
-  'póliza de seguro':       'insurance_policy',
-  'poliza de seguro':       'insurance_policy',
-  'venc. seguro':           'insurance_expiry',
-  'vencimiento seguro':     'insurance_expiry',
-  'venc. permiso':          'permit_expiry',
-  'vencimiento permiso':    'permit_expiry',
-  'notas':                  'notes',
+  'marca': 'brand',
+  'modelo': 'model',
+  'año': 'year',
+  'color': 'color',
+  'placas': 'plates',
+  'tarifa diaria': 'daily_rate',
+  'tarifa diaria (rd$)': 'daily_rate',
+  'vin': 'vin',
+  'póliza de seguro': 'insurance_policy',
+  'poliza de seguro': 'insurance_policy',
+  'venc. seguro': 'insurance_expiry',
+  'vencimiento seguro': 'insurance_expiry',
+  'venc. permiso': 'permit_expiry',
+  'vencimiento permiso': 'permit_expiry',
+  'notas': 'notes',
 }
 
 /** Normaliza un encabezado crudo a clave de mapeo */
@@ -44,7 +44,7 @@ function loadSheetJS(): Promise<void> {
     if ((window as unknown as Record<string, unknown>).XLSX) { resolve(); return }
     const script = document.createElement('script')
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
-    script.onload  = () => resolve()
+    script.onload = () => resolve()
     script.onerror = () => reject(new Error('No se pudo cargar la librería de lectura Excel'))
     document.head.appendChild(script)
   })
@@ -63,16 +63,16 @@ function formatDate(val: unknown): string {
 }
 
 export default function ImportarFlota() {
-  const [open, setOpen]             = useState(false)
-  const [file, setFile]             = useState<File | null>(null)
-  const [result, setResult]         = useState<ImportResult | null>(null)
+  const [open, setOpen] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
+  const [result, setResult] = useState<ImportResult | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
-  const [pending, startTransition]  = useTransition()
+  const [pending, startTransition] = useTransition()
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Pre-cargar SheetJS cuando el modal se abra
   useEffect(() => {
-    if (open) loadSheetJS().catch(() => {/* se volverá a intentar al importar */})
+    if (open) loadSheetJS().catch(() => {/* se volverá a intentar al importar */ })
   }, [open])
 
   function reset() {
@@ -196,14 +196,6 @@ export default function ImportarFlota() {
                 <p className="text-sm text-blue-700 mb-3">
                   Para importar correctamente usa nuestra plantilla. Incluye instrucciones, columnas exactas y una fila de ejemplo en la fila 5.
                 </p>
-                <div className="flex items-start gap-2 bg-blue-100 rounded-lg px-3 py-2 mb-3">
-                  <svg className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
-                  </svg>
-                  <p className="text-xs text-blue-800">
-                    La <strong>fila 5 es un ejemplo</strong> — reemplázala o bórrala antes de importar. Si la dejas, será ignorada automáticamente al importar.
-                  </p>
-                </div>
                 <a
                   href="/templates/plantilla-flota.xlsx"
                   download="plantilla-flota.xlsx"
@@ -214,6 +206,14 @@ export default function ImportarFlota() {
                   </svg>
                   Descargar plantilla (.xlsx)
                 </a>
+                <div className="flex items-start gap-2 bg-blue-100 rounded-lg px-3 py-2 mb-3">
+                  <svg className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+                  </svg>
+                  <p className="text-xs text-blue-800">
+                    La <strong>fila 5 es un ejemplo</strong> — reemplázala o bórrala antes de importar. Si la dejas, será ignorada automáticamente al importar.
+                  </p>
+                </div>
               </div>
 
               {/* Columnas */}
@@ -221,17 +221,17 @@ export default function ImportarFlota() {
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Columnas de la plantilla</p>
                 <div className="grid grid-cols-2 gap-1.5 text-xs">
                   {[
-                    { label: 'Marca',          req: true  },
-                    { label: 'Modelo',         req: true  },
-                    { label: 'Año',            req: true  },
-                    { label: 'Color',          req: true  },
-                    { label: 'Placas',         req: true  },
-                    { label: 'Tarifa Diaria',  req: true  },
-                    { label: 'VIN',            req: false },
-                    { label: 'Póliza Seguro',  req: false },
-                    { label: 'Venc. Seguro',   req: false },
-                    { label: 'Venc. Permiso',  req: false },
-                    { label: 'Notas',          req: false },
+                    { label: 'Marca', req: true },
+                    { label: 'Modelo', req: true },
+                    { label: 'Año', req: true },
+                    { label: 'Color', req: true },
+                    { label: 'Placas', req: true },
+                    { label: 'Tarifa Diaria', req: true },
+                    { label: 'VIN', req: false },
+                    { label: 'Póliza Seguro', req: false },
+                    { label: 'Venc. Seguro', req: false },
+                    { label: 'Venc. Permiso', req: false },
+                    { label: 'Notas', req: false },
                   ].map(({ label, req }) => (
                     <div key={label} className="flex items-center gap-1.5">
                       <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${req ? 'bg-blue-500' : 'bg-gray-300'}`} />
