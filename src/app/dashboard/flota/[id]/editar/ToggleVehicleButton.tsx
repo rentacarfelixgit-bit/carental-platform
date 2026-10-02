@@ -23,7 +23,7 @@ export default function ToggleVehicleButton({ vehicleId, active }: Props) {
   }
 
   return (
-    <div className="max-w-2xl mx-auto px-6 pb-6">
+    <div className="max-w-2xl mx-auto px-6 pb-6 space-y-2">
       <button
         onClick={handleToggle}
         disabled={pending}
@@ -34,8 +34,13 @@ export default function ToggleVehicleButton({ vehicleId, active }: Props) {
             : 'border-green-200 text-green-700 hover:bg-green-50'
         }`}
       >
-        {pending ? 'Guardando...' : isActive ? 'Desactivar vehículo' : 'Reactivar vehículo'}
+        {pending ? 'Guardando...' : isActive ? 'Dar de baja (ocultar de la flota)' : 'Reactivar vehículo'}
       </button>
+      <p className="text-xs text-gray-400 text-center">
+        {isActive
+          ? 'Úsalo si el vehículo fue vendido o retirado. Para bloqueos temporales, usa la sección Bloqueos.'
+          : 'El vehículo está dado de baja y no aparece en la flota ni en reservas.'}
+      </p>
     </div>
   )
 }

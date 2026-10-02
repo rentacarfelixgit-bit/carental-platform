@@ -89,7 +89,7 @@ export default async function FlotaPage({ searchParams }: Props) {
   if (status)     query = query.eq('status', status)
   if (q)          query = query.or(`plates.ilike.%${q}%,brand.ilike.%${q}%,model.ilike.%${q}%`)
 
-  const [{ data: vehicles, count }, { data: openAlerts }] = await Promise.all([
+  const [{ data: vehicles, count }, { data: openAlerts }, { count: inactivosCount }] = await Promise.all([
     query,
     // IDs de vehículos con alertas abiertas en este tenant
     supabase
@@ -97,6 +97,10 @@ export default async function FlotaPage({ searchParams }: Props) {
       .select('vehicle_id')
       .eq('tenant_id', profile.tenant_id)
       .eq('resolved', false),
+    // Conteo de vehículos inactivos (solo si NO estamos ya viendo inactivos)
+    !inactivos
+      ? supabase.from('vehicles').select('id', { count: 'exact', head: true }).eq('tenant_id', profile.tenant_id).eq('active', false)
+      : Promise.resolve({ count: 0 }),
   ])
 
   const alertVehicleIds = new Set((openAlerts ?? []).map(a => a.vehicle_id))
@@ -153,6 +157,19 @@ export default async function FlotaPage({ searchParams }: Props) {
           </Link>
         </div>
       </div>
+
+      {/* Aviso de vehículos dados de baja */}
+      {!inactivos && (inactivosCount ?? 0) > 0 && (
+        <div className="mb-4 flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-600">
+          <svg className="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+          </svg>
+          <span>
+            {inactivosCount} vehículo{inactivosCount !== 1 ? 's' : ''} dado{inactivosCount !== 1 ? 's' : ''} de baja (oculto{inactivosCount !== 1 ? 's' : ''}).{' '}
+            <a href="/dashboard/flota?inactivos=1" className="text-blue-600 hover:underline font-medium">Ver inactivos</a>
+          </span>
+        </div>
+      )}
 
       {/* Filtros */}
       <form method="GET" className="flex flex-wrap gap-3 mb-5">
