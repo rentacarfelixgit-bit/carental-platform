@@ -153,7 +153,7 @@ export default async function ContratoPrintPage({ params }: Props) {
   const totalTaxes = (itbisAmt ?? 0) + (airportAmt ?? 0) + (digitalAmt ?? 0)
   const totalUSD   = subtotal ? subtotal + totalTaxes : null
 
-  const fmt = (n: number | null) => n != null ? `$${n.toFixed(2)}` : ''
+  const fmtAmt = (n: number | null) => n != null ? `$${n.toFixed(2)}` : ''
 
   const extraDriver = extras.find(e => e.extra_type === 'extra_driver')
 
@@ -430,10 +430,10 @@ export default async function ContratoPrintPage({ params }: Props) {
                         {([
                           ['TASA DE CAMBIO: USD - RD', ''],
                           ['DEPÓSITO', ''],
-                          ['SUB-TOTAL', fmt(subtotal)],
-                          ...(taxItbis   ? [['IMPUESTOS: ITBIS (18%)',            fmt(itbisAmt)]]   : [['IMPUESTOS: ITBIS (   )', '']]),
-                          ...(taxAirport ? [['IMPUESTOS: AEROPORTUARIO (10%)',    fmt(airportAmt)]] : [['IMPUESTOS: AIRPORT (   )', '']]),
-                          ...(taxDigital ? [['IMPUESTOS: PAGOS DIGITALES (5%)',   fmt(digitalAmt)]] : []),
+                          ['SUB-TOTAL', fmtAmt(subtotal)],
+                          ...(taxItbis   ? [['IMPUESTOS: ITBIS (18%)',            fmtAmt(itbisAmt)]]   : [['IMPUESTOS: ITBIS (   )', '']]),
+                          ...(taxAirport ? [['IMPUESTOS: AEROPORTUARIO (10%)',    fmtAmt(airportAmt)]] : [['IMPUESTOS: AIRPORT (   )', '']]),
+                          ...(taxDigital ? [['IMPUESTOS: PAGOS DIGITALES (5%)',   fmtAmt(digitalAmt)]] : []),
                           ['DESCUENTOS', ''],
                         ] as [string, string][]).map(([label, val], i) => (
                           <tr key={`t${i}`}>
@@ -443,7 +443,7 @@ export default async function ContratoPrintPage({ params }: Props) {
                         ))}
                         <tr>
                           <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN DÓLARES (USD):</td>
-                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmt(totalUSD)}</td>
+                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmtAmt(totalUSD)}</td>
                         </tr>
                         <tr>
                           <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN PESOS (RD):</td>
