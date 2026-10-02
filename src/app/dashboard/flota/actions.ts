@@ -293,8 +293,8 @@ export async function importVehicles(rows: Record<string, string>[]) {
     const rowNum = i + 6  // offset: plantilla empieza en fila 6
     const raw = rows[i]
 
-    // Saltar filas totalmente vacías
-    const requiredEmpty = !raw.brand && !raw.model && !raw.plates
+    // Saltar filas donde falte cualquier campo obligatorio (incluye filas de notas/advertencias del template)
+    const requiredEmpty = !raw.brand || !raw.model || !raw.color || !raw.plates || !raw.year || !raw.daily_rate
     if (requiredEmpty) { skipped++; continue }
 
     // Saltar la fila de ejemplo de la plantilla
