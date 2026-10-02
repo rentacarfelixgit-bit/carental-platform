@@ -142,7 +142,9 @@ export default function ImportarFlota() {
         .filter((r: Record<string, string>) => Object.values(r).some(v => v !== ''))
 
       if (rows.length === 0) {
-        setParseError('El archivo no contiene filas de datos. Asegúrate de usar la plantilla y llenar desde la fila 6.')
+        // DEBUG temporal — quitar después
+        const debugHeaders = headers.map((h, i) => `[${i}]"${h}"→"${normalizeHeader(h)}"→${COL_MAP[normalizeHeader(h)] ?? '❌'}`)
+        setParseError(`DEBUG: ${raw.length} filas totales, headerIdx=${headerRowIdx}, fields=${JSON.stringify(Object.keys(fieldIndices))} | Headers: ${debugHeaders.join(' | ')}`)
         return
       }
     } catch (err) {
