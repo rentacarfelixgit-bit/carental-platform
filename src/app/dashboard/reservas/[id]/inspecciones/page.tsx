@@ -41,7 +41,7 @@ interface DamagePoint {
 }
 
 interface InspectionPhoto {
-  id: string; storage_path: string
+  id: string; storage_path: string; signedUrl: string
 }
 
 interface Inspection {
@@ -84,8 +84,35 @@ export default async function InspeccionesResumenPage({ params }: Props) {
     .eq('reservation_id', id)
     .order('completed_at')
 
-  const checkout = inspections?.find(i => i.type === 'checkout') as Inspection | undefined
-  const checkin  = inspections?.find(i => i.type === 'checkin')  as Inspection | undefined
+  // Generar signed URLs para todas las fotos de inspección (bucket privado)
+  const rawInspections = inspections ?? []
+  const allPaths = rawInspections.flatMap(i =>
+    (i.inspection_photos ?? []).map((p: { id: string; storage_path: string }) => p.storage_path)
+  )
+  const signedUrlMap: Record<string, string> = {}
+  if (allPaths.length > 0) {
+    const { data: signedData } = await supabase.storage
+      .from('inspection-photos')
+      .createSignedUrls(allPaths, 3600)
+    signedData?.forEach(item => {
+      // item.path contiene el storage_path relativo
+      if (item.signedUrl && item.path) signedUrlMap[item.path] = item.signedUrl
+    })
+  }
+
+  // Enriquecer las fotos con la signed URL
+  const enriched = rawInspections.map(i => ({
+    ...i,
+    inspection_photos: (i.inspection_photos ?? []).map(
+      (p: { id: string; storage_path: string }) => ({
+        ...p,
+        signedUrl: signedUrlMap[p.storage_path] ?? '',
+      })
+    ),
+  }))
+
+  const checkout = enriched.find(i => i.type === 'checkout') as Inspection | undefined
+  const checkin  = enriched.find(i => i.type === 'checkin')  as Inspection | undefined
   const canInspect = reservation.status !== 'cancelled'
 
   const v = reservation.vehicles as unknown as { brand: string; model: string; plates: string } | null
@@ -261,27 +288,22 @@ function PhotoGrid({ photos }: { photos: InspectionPhoto[] }) {
     <div>
       <p className="text-xs text-gray-400 mb-2">{photos.length} foto{photos.length !== 1 ? 's' : ''}</p>
       <div className="grid grid-cols-4 gap-1.5">
-        {photos.map(photo => {
-          // Construir URL pública del bucket
-          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-          const publicUrl = `${supabaseUrl}/storage/v1/object/public/inspection-photos/${photo.storage_path}`
-          return (
-            <a
-              key={photo.id}
-              href={publicUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={publicUrl}
-                alt="Foto de inspección"
-                className="w-full h-full object-cover"
-              />
-            </a>
-          )
-        })}
+        {photos.map(photo => (
+          <a
+            key={photo.id}
+            href={photo.signedUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photo.signedUrl}
+              alt="Foto de inspección"
+              className="w-full h-full object-cover"
+            />
+          </a>
+        ))}
       </div>
     </div>
   )
