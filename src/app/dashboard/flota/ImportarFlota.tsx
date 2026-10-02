@@ -31,10 +31,12 @@ const COL_MAP: Record<string, string> = {
 /** Normaliza un encabezado crudo a clave de mapeo */
 function normalizeHeader(h: string): string {
   return h
+    .replace(/[\r\n]+/g, ' ')            // saltos de línea → espacio
     .toLowerCase()
     .replace(/\s*\*.*/, '')               // quitar " *" y lo que sigue
-    .replace(/\s*\(aaaa.*/, '')           // quitar "(aaaa-mm-dd)" etc
+    .replace(/\s*\(.*/, '')              // quitar cualquier paréntesis y lo que sigue
     .replace(/[^\w\s.áéíóúñü]/gi, '')    // quitar símbolos raros
+    .replace(/\s+/g, ' ')               // espacios múltiples → uno solo
     .trim()
 }
 

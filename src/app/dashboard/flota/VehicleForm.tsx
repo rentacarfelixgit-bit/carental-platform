@@ -158,7 +158,7 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {canEditRate ? (
               <Field
-                label="Tarifa diaria *"
+                label="Tarifa diaria (RD$) *"
                 name="daily_rate"
                 type="number"
                 defaultValue={state.values?.daily_rate ?? vehicle?.daily_rate?.toString() ?? ''}

@@ -249,7 +249,7 @@ export default function NuevaReservaForm({ clients, initialStartDate = '', initi
                     {availableVehicles.map(v => (
                       <option key={v.id} value={v.id}>
                         {v.brand} {v.model} {v.year} · {v.plates} · {v.color}
-                        {v.daily_rate ? ` · $${v.daily_rate}/día` : ''}
+                        {v.daily_rate ? ` · RD$${v.daily_rate}/día` : ''}
                       </option>
                     ))}
                   </select>
@@ -259,10 +259,10 @@ export default function NuevaReservaForm({ clients, initialStartDate = '', initi
                 {/* Tarifa y total */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Total a cobrar (USD)
+                    Total a cobrar (RD$)
                     {selectedVehicleRate && startDate && endDate && new Date(endDate) > new Date(startDate) && (
                       <span className="ml-2 text-xs text-gray-400 font-normal">
-                        Tarifa sugerida: ${selectedVehicleRate}/día × {Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))} día(s)
+                        Tarifa sugerida: RD${selectedVehicleRate}/día × {Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))} día(s)
                       </span>
                     )}
                   </label>

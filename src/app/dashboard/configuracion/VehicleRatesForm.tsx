@@ -51,7 +51,7 @@ export default function VehicleRatesForm({ vehicles }: { vehicles: Vehicle[] }) 
             <p className="text-xs font-mono text-gray-400">{v.plates}</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            <span className="text-xs text-gray-500">USD $</span>
+            <span className="text-xs text-gray-500">RD$</span>
             <input
               type="number"
               min="0"
