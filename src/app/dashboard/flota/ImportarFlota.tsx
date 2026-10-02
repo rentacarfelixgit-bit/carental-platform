@@ -108,9 +108,12 @@ export default function ImportarFlota() {
       // raw: array de arrays
       const raw: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
 
-      // Buscar la fila de encabezados (la que contiene "Marca" o "marca")
+      // Buscar la fila de encabezados: una celda que sea exactamente "Marca *" o empiece con "marca " (no "marcados")
       let headerRowIdx = raw.findIndex((r: unknown[]) =>
-        r.some((cell: unknown) => String(cell).toLowerCase().includes('marca'))
+        r.some((cell: unknown) => {
+          const s = String(cell).replace(/[\r\n]+/g, ' ').trim().toLowerCase()
+          return s === 'marca' || (s.startsWith('marca ') && s.length < 20)
+        })
       )
       if (headerRowIdx === -1) headerRowIdx = 3
 
@@ -142,9 +145,7 @@ export default function ImportarFlota() {
         .filter((r: Record<string, string>) => Object.values(r).some(v => v !== ''))
 
       if (rows.length === 0) {
-        // DEBUG temporal — quitar después
-        const debugHeaders = headers.map((h, i) => `[${i}]"${h}"→"${normalizeHeader(h)}"→${COL_MAP[normalizeHeader(h)] ?? '❌'}`)
-        setParseError(`DEBUG: ${raw.length} filas totales, headerIdx=${headerRowIdx}, fields=${JSON.stringify(Object.keys(fieldIndices))} | Headers: ${debugHeaders.join(' | ')}`)
+        setParseError('El archivo no contiene filas de datos. Asegúrate de llenar desde la fila 6 y de no cambiar los encabezados de la plantilla.')
         return
       }
     } catch (err) {
