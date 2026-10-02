@@ -92,6 +92,45 @@ export async function createUser(
   }
 }
 
+export async function changeUserPassword(
+  userId: string,
+  newPassword: string
+): Promise<{ success?: boolean; error?: string }> {
+  if (!newPassword || newPassword.length < 8) {
+    return { error: 'La contraseña debe tener al menos 8 caracteres.' }
+  }
+
+  const supabase = await createClient()
+  const { data: { user: currentUser } } = await supabase.auth.getUser()
+  if (!currentUser) return { error: 'No autorizado' }
+
+  const { data: profile } = await supabase
+    .from('users')
+    .select('tenant_id, role')
+    .eq('id', currentUser.id)
+    .single()
+
+  if (!profile || (profile.role !== 'admin' && profile.role !== 'superadmin')) {
+    return { error: 'No tienes permisos para cambiar contraseñas.' }
+  }
+
+  // Verificar que el usuario objetivo pertenece al mismo tenant
+  const { data: targetUser } = await supabase
+    .from('users')
+    .select('id')
+    .eq('id', userId)
+    .eq('tenant_id', profile.tenant_id)
+    .single()
+
+  if (!targetUser) return { error: 'Usuario no encontrado.' }
+
+  const admin = createAdminClient()
+  const { error } = await admin.auth.admin.updateUserById(userId, { password: newPassword })
+  if (error) return { error: `Error al cambiar la contraseña: ${error.message}` }
+
+  return { success: true }
+}
+
 export async function toggleUserActive(userId: string, active: boolean) {
   const supabase = await createClient()
   const { data: { user: currentUser } } = await supabase.auth.getUser()
