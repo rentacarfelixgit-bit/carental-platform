@@ -8,7 +8,11 @@ import { z } from 'zod'
 const currentYear = new Date().getFullYear()
 
 const VehicleSchema = z.object({
-  plates:            z.string().trim().min(1, 'Las placas son requeridas').max(20, 'Las placas no pueden exceder 20 caracteres').toUpperCase(),
+  plates:            z.string().trim()
+    .min(5, 'Las placas deben tener al menos 5 caracteres')
+    .max(20, 'Las placas no pueden exceder 20 caracteres')
+    .regex(/^[A-Za-z0-9\-\*]+$/, 'Las placas solo pueden contener letras, números, guion (-) y asterisco (*)')
+    .toUpperCase(),
   brand:             z.string().trim().min(1, 'La marca es requerida').max(100, 'La marca no puede exceder 100 caracteres'),
   model:             z.string().trim().min(1, 'El modelo es requerido').max(100, 'El modelo no puede exceder 100 caracteres'),
   year:              z.coerce.number().int().min(1990, 'El año debe ser 1990 o posterior').max(currentYear + 1, `El año no puede ser mayor a ${currentYear + 1}`),

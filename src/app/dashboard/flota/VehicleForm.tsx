@@ -68,6 +68,14 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
       }
     }
 
+    // Validación de placas
+    const plates = String(formData.get('plates') ?? '').trim()
+    if (plates && plates.length < 5) {
+      errors.plates = 'Las placas deben tener al menos 5 caracteres.'
+    } else if (plates && !/^[A-Za-z0-9\-\*]+$/.test(plates)) {
+      errors.plates = 'Solo se permiten letras, números, guion (-) y asterisco (*).'
+    }
+
     const year = Number(formData.get('year'))
     const currentYear = new Date().getFullYear()
     if (!formData.get('year')) {
@@ -118,7 +126,13 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="Placas *" name="plates" defaultValue={state.values?.plates ?? vehicle?.plates} error={getFieldError('plates')} disabled={pending} placeholder="ABC-1234" className="uppercase" maxLength={20} required />
+            <Field label="Placas *" name="plates" defaultValue={state.values?.plates ?? vehicle?.plates} error={getFieldError('plates')} disabled={pending} placeholder="ABC-1234" className="uppercase" maxLength={20} required
+              onInput={(e: React.FormEvent<HTMLInputElement>) => {
+                const input = e.currentTarget
+                const clean = input.value.replace(/[^A-Za-z0-9\-\*]/g, '').toUpperCase()
+                if (clean !== input.value) input.value = clean
+              }}
+            />
             <Field label="VIN (opcional)" name="vin" defaultValue={state.values?.vin ?? vehicle?.vin ?? ''} disabled={pending} placeholder="1HGBH41JXMN109186" maxLength={17} />
           </div>
         </div>
@@ -176,11 +190,12 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
 }
 
 function Field({
-  label, name, type = 'text', defaultValue, error, disabled, placeholder, className = '', required, min, max, maxLength
+  label, name, type = 'text', defaultValue, error, disabled, placeholder, className = '', required, min, max, maxLength, onInput
 }: {
   label: string; name: string; type?: string; defaultValue?: string
   error?: string; disabled?: boolean; placeholder?: string; className?: string
   required?: boolean; min?: number; max?: number; maxLength?: number
+  onInput?: (e: React.FormEvent<HTMLInputElement>) => void
 }) {
   return (
     <div>
@@ -188,6 +203,7 @@ function Field({
       <input
         id={name} name={name} type={type} defaultValue={defaultValue}
         disabled={disabled} placeholder={placeholder} required={required} min={min} max={max} maxLength={maxLength}
+        onInput={onInput}
         className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50 ${error ? 'border-red-300 bg-red-50' : 'border-gray-300'} ${className}`}
       />
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
