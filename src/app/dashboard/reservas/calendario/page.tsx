@@ -1,5 +1,5 @@
 // src/app/dashboard/reservas/calendario/page.tsx
-// Calendario mensual de reservas — vista por quincena
+// Calendario mensual — grid 7 columnas Dom→Sáb
 
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
@@ -17,84 +17,82 @@ const STATUS_LABELS: Record<string, string> = {
   pending:   'Pendiente',
   confirmed: 'Confirmada',
   active:    'En curso',
-  completed: 'Completada',
-  cancelled: 'Cancelada',
 }
 
-const DIAS_ES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+const DOW_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
 
 interface Reservation {
   id: string
-  start_date: string
-  end_date: string
+  start_date: string   // YYYY-MM-DD
+  end_date: string     // YYYY-MM-DD
   status: string
-  clients: { full_name: string } | { full_name: string }[] | null
+  clients:  { full_name: string } | { full_name: string }[] | null
   vehicles: { brand: string; model: string; plates: string } | { brand: string; model: string; plates: string }[] | null
 }
 
-function getClient(r: Reservation): { full_name: string } | null {
-  if (!r.clients) return null
-  return Array.isArray(r.clients) ? (r.clients[0] ?? null) : r.clients
+function clientName(r: Reservation): string {
+  if (!r.clients) return '—'
+  const c = Array.isArray(r.clients) ? r.clients[0] : r.clients
+  return c?.full_name ?? '—'
 }
 
-function getVehicle(r: Reservation): { brand: string; model: string; plates: string } | null {
-  if (!r.vehicles) return null
-  return Array.isArray(r.vehicles) ? (r.vehicles[0] ?? null) : r.vehicles
+function vehicleLabel(r: Reservation): string {
+  if (!r.vehicles) return ''
+  const v = Array.isArray(r.vehicles) ? r.vehicles[0] : r.vehicles
+  return v ? `${v.brand} ${v.model} · ${v.plates}` : ''
 }
 
-interface Props {
-  searchParams: Promise<{ mes?: string; q?: string }>
-}
-
-function todayStr() {
-  return new Date().toISOString().slice(0, 10)
-}
-
-function parseMonth(mes?: string): { year: number; month: number } {
+function parseMonth(mes?: string) {
   if (mes && /^\d{4}-\d{2}$/.test(mes)) {
     const [y, m] = mes.split('-').map(Number)
     return { year: y, month: m }
   }
-  const now = new Date()
-  return { year: now.getFullYear(), month: now.getMonth() + 1 }
+  const n = new Date()
+  return { year: n.getFullYear(), month: n.getMonth() + 1 }
+}
+
+function pad2(n: number) { return String(n).padStart(2, '0') }
+
+function dayStr(year: number, month: number, day: number) {
+  return `${year}-${pad2(month)}-${pad2(day)}`
 }
 
 function daysInMonth(year: number, month: number) {
   return new Date(year, month, 0).getDate()
 }
 
-function dayStr(year: number, month: number, day: number) {
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+// Day of week (0=Sun) for the 1st of month
+function firstDowOfMonth(year: number, month: number) {
+  return new Date(`${year}-${pad2(month)}-01T12:00:00Z`).getUTCDay()
 }
 
-function getDayOfWeek(year: number, month: number, day: number) {
-  return new Date(`${dayStr(year, month, day)}T12:00:00Z`).getUTCDay()
+interface Props {
+  searchParams: Promise<{ mes?: string }>
 }
 
 export default async function CalendarioReservasPage({ searchParams }: Props) {
-  const { mes, q } = await searchParams
+  const { mes } = await searchParams
   const { year, month } = parseMonth(mes)
-  const quincena = q === '2' ? 2 : 1
 
-  const totalDays  = daysInMonth(year, month)
-  const startDay   = quincena === 1 ? 1 : 16
-  const endDay     = quincena === 1 ? 15 : totalDays
-  const days       = Array.from({ length: endDay - startDay + 1 }, (_, i) => startDay + i)
+  const totalDays = daysInMonth(year, month)
+  const firstDow  = firstDowOfMonth(year, month)   // 0–6, how many blank cells at start
 
-  const firstDate  = dayStr(year, month, startDay)
-  const lastDate   = dayStr(year, month, endDay)
+  const firstDate = dayStr(year, month, 1)
+  const lastDate  = dayStr(year, month, totalDays)
 
   // Month navigation
   const prevMonth = month === 1
     ? `${year - 1}-12`
-    : `${year}-${String(month - 1).padStart(2, '0')}`
+    : `${year}-${pad2(month - 1)}`
   const nextMonth = month === 12
     ? `${year + 1}-01`
-    : `${year}-${String(month + 1).padStart(2, '0')}`
+    : `${year}-${pad2(month + 1)}`
 
-  const now       = new Date()
-  const thisMes   = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-  const monthName = new Date(`${year}-${String(month).padStart(2, '0')}-15`)
+  const now     = new Date()
+  const thisMes = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}`
+  const today   = now.toISOString().slice(0, 10)
+
+  const monthName = new Date(`${year}-${pad2(month)}-15`)
     .toLocaleDateString('es-DO', { month: 'long', year: 'numeric' })
 
   const supabase = await createClient()
@@ -105,39 +103,38 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
     .from('users').select('tenant_id').eq('id', user.id).single()
   if (!profile) redirect('/login')
 
-  // Fetch reservations that overlap the visible range
   const { data: reservations } = await supabase
     .from('reservations')
-    .select(`
-      id, start_date, end_date, status,
-      clients ( full_name ),
-      vehicles ( brand, model, plates )
-    `)
+    .select('id, start_date, end_date, status, clients(full_name), vehicles(brand, model, plates)')
     .eq('tenant_id', profile.tenant_id)
-    .not('status', 'in', '("cancelled")')
+    .not('status', 'in', '("cancelled","completed")')
     .lte('start_date', lastDate)
     .gte('end_date',   firstDate)
     .order('start_date') as { data: Reservation[] | null }
 
-  // Group reservations by day
+  // Map: day (1..31) → reservations active that day
   const byDay: Record<number, Reservation[]> = {}
-  for (const day of days) byDay[day] = []
+  for (let d = 1; d <= totalDays; d++) byDay[d] = []
 
-  for (const r of (reservations ?? []) as Reservation[]) {
-    for (const day of days) {
-      const d = dayStr(year, month, day)
-      if (r.start_date <= d && r.end_date >= d) {
-        byDay[day].push(r)
-      }
+  for (const r of reservations ?? []) {
+    for (let d = 1; d <= totalDays; d++) {
+      const ds = dayStr(year, month, d)
+      if (r.start_date <= ds && r.end_date >= ds) byDay[d].push(r)
     }
   }
 
-  const today = todayStr()
+  // Build calendar grid cells: leading blanks + days
+  const cells: Array<{ day: number } | null> = [
+    ...Array(firstDow).fill(null),
+    ...Array.from({ length: totalDays }, (_, i) => ({ day: i + 1 })),
+  ]
+  // Pad to complete last row
+  while (cells.length % 7 !== 0) cells.push(null)
 
   return (
     <div className="p-6">
       {/* Header */}
-      <div className="flex items-start justify-between mb-6 flex-wrap gap-4">
+      <div className="flex items-start justify-between mb-5 flex-wrap gap-4">
         <div>
           <Link
             href="/dashboard/reservas"
@@ -150,150 +147,120 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
           </Link>
           <h1 className="text-xl font-semibold text-gray-900 capitalize">{monthName}</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {reservations?.length ?? 0} reservas en este período
+            {reservations?.length ?? 0} reservas activas
           </p>
         </div>
 
-        {/* Navegación de mes */}
         <div className="flex items-center gap-2">
-          <Link
-            href={`?mes=${prevMonth}&q=${quincena}`}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"
-          >
+          <Link href={`?mes=${prevMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">
             ← Anterior
           </Link>
-          <Link
-            href={`?mes=${thisMes}&q=1`}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"
-          >
+          <Link href={`?mes=${thisMes}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">
             Hoy
           </Link>
-          <Link
-            href={`?mes=${nextMonth}&q=${quincena}`}
-            className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"
-          >
+          <Link href={`?mes=${nextMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">
             Siguiente →
           </Link>
         </div>
       </div>
 
-      {/* Quincena tabs */}
-      <div className="flex items-center gap-2 mb-5">
-        <Link
-          href={`?mes=${mes ?? thisMes}&q=1`}
-          className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors border ${
-            quincena === 1
-              ? 'bg-blue-600 text-white border-blue-600'
-              : 'text-gray-600 border-gray-300 hover:bg-gray-50'
-          }`}
-        >
-          1 – 15
-        </Link>
-        <Link
-          href={`?mes=${mes ?? thisMes}&q=2`}
-          className={`px-4 py-2 text-sm rounded-lg font-medium transition-colors border ${
-            quincena === 2
-              ? 'bg-blue-600 text-white border-blue-600'
-              : 'text-gray-600 border-gray-300 hover:bg-gray-50'
-          }`}
-        >
-          16 – {totalDays}
-        </Link>
-
-        <div className="ml-auto flex items-center gap-3 flex-wrap">
-          {Object.entries(STATUS_LABELS).filter(([k]) => k !== 'cancelled').map(([k, label]) => (
-            <span key={k} className="flex items-center gap-1.5 text-xs text-gray-500">
-              <span className={`w-2.5 h-2.5 rounded-full ${STATUS_COLORS[k]?.dot ?? 'bg-gray-400'}`} />
-              {label}
-            </span>
-          ))}
-        </div>
+      {/* Leyenda */}
+      <div className="flex items-center gap-4 mb-4 flex-wrap">
+        {Object.entries(STATUS_LABELS).map(([k, label]) => (
+          <span key={k} className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span className={`w-2.5 h-2.5 rounded-full ${STATUS_COLORS[k].dot}`} />
+            {label}
+          </span>
+        ))}
       </div>
 
-      {/* Calendario */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-x-auto">
-        <div
-          className="grid"
-          style={{ gridTemplateColumns: `repeat(${days.length}, minmax(100px, 1fr))` }}
-        >
-          {/* Header de días */}
-          {days.map((day) => {
-            const d     = dayStr(year, month, day)
-            const dow   = getDayOfWeek(year, month, day)
-            const isToday = d === today
-            const isWeekend = dow === 0 || dow === 6
-            return (
-              <div
-                key={`h-${day}`}
-                className={`px-3 py-2.5 text-center border-b border-r border-gray-200 last:border-r-0 ${
-                  isToday ? 'bg-blue-50' : isWeekend ? 'bg-gray-50/60' : 'bg-white'
-                }`}
-              >
-                <p className="text-xs text-gray-400 uppercase tracking-wide">{DIAS_ES[dow]}</p>
-                <p className={`text-lg font-semibold mt-0.5 ${isToday ? 'text-blue-600' : 'text-gray-800'}`}>
-                  {day}
-                </p>
-              </div>
-            )
-          })}
+      {/* Grid calendario */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
 
-          {/* Celdas de días con reservas */}
-          {days.map((day) => {
-            const d       = dayStr(year, month, day)
-            const dow     = getDayOfWeek(year, month, day)
-            const isToday = d === today
-            const isWeekend = dow === 0 || dow === 6
-            const rsvs    = byDay[day] ?? []
-            const MAX_VIS = 4
-            const hidden  = rsvs.length - MAX_VIS
+        {/* Encabezado días de semana */}
+        <div className="grid grid-cols-7 border-b border-gray-200">
+          {DOW_LABELS.map((d) => (
+            <div key={d} className={`py-2 text-center text-xs font-medium uppercase tracking-wide ${d === 'Dom' || d === 'Sáb' ? 'text-gray-400' : 'text-gray-500'}`}>
+              {d}
+            </div>
+          ))}
+        </div>
 
-            return (
-              <div
-                key={`c-${day}`}
-                className={`min-h-[120px] border-r border-gray-100 last:border-r-0 p-1.5 relative group ${
-                  isToday ? 'bg-blue-50/30' : isWeekend ? 'bg-gray-50/40' : ''
-                }`}
-              >
-                {/* Zona clicable para nueva reserva */}
-                <Link
-                  href={`/dashboard/reservas/nueva?start=${d}`}
-                  className="absolute inset-0 z-0 opacity-0 group-hover:opacity-100 pointer-events-none"
-                  aria-hidden="true"
+        {/* Semanas */}
+        <div className="grid grid-cols-7 divide-x divide-gray-100">
+          {cells.map((cell, i) => {
+            const isLastRow   = i >= cells.length - 7
+            const colIndex    = i % 7
+            const isWeekend   = colIndex === 0 || colIndex === 6
+
+            if (!cell) {
+              return (
+                <div
+                  key={`blank-${i}`}
+                  className={`min-h-[110px] p-1.5 ${isLastRow ? '' : 'border-b border-gray-100'} ${isWeekend ? 'bg-gray-50/60' : 'bg-gray-50/30'}`}
                 />
+              )
+            }
 
-                {/* Píldoras de reservas */}
-                <div className="space-y-1 relative z-10">
-                  {rsvs.slice(0, MAX_VIS).map((r) => {
+            const { day }  = cell
+            const ds       = dayStr(year, month, day)
+            const isToday  = ds === today
+            const rsvs     = byDay[day] ?? []
+            const MAX_SHOW = 3
+            const extra    = rsvs.length - MAX_SHOW
+
+            return (
+              <div
+                key={`day-${day}`}
+                className={`min-h-[110px] p-1.5 group relative ${isLastRow ? '' : 'border-b border-gray-100'} ${isToday ? 'bg-blue-50/40' : isWeekend ? 'bg-gray-50/40' : 'bg-white'} hover:bg-gray-50/60 transition-colors`}
+              >
+                {/* Número del día */}
+                <div className="flex items-center justify-between mb-1">
+                  <Link
+                    href={`/dashboard/reservas/nueva?start=${ds}`}
+                    className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-medium transition-colors ${
+                      isToday
+                        ? 'bg-blue-600 text-white'
+                        : 'text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+                    }`}
+                    title={`Nueva reserva el ${day}`}
+                  >
+                    {day}
+                  </Link>
+                  {/* Botón + en hover */}
+                  {!isToday && (
+                    <Link
+                      href={`/dashboard/reservas/nueva?start=${ds}`}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 rounded-full bg-blue-100 hover:bg-blue-200 flex items-center justify-center"
+                      title="Nueva reserva"
+                    >
+                      <svg className="w-3 h-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                      </svg>
+                    </Link>
+                  )}
+                </div>
+
+                {/* Reservas */}
+                <div className="space-y-0.5">
+                  {rsvs.slice(0, MAX_SHOW).map((r) => {
                     const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
-                    const cli = getClient(r)
-                    const veh = getVehicle(r)
                     return (
                       <Link
                         key={r.id}
                         href={`/dashboard/reservas/${r.id}`}
-                        className={`block w-full text-left px-2 py-1 rounded text-xs font-medium truncate ${col.bg} ${col.text} hover:brightness-95 transition-all`}
-                        title={`${cli?.full_name} · ${veh?.brand} ${veh?.model} (${veh?.plates})`}
+                        className={`flex items-center gap-1 w-full px-1.5 py-0.5 rounded text-xs truncate ${col.bg} ${col.text} hover:brightness-95 transition-all`}
+                        title={`${clientName(r)} · ${vehicleLabel(r)}`}
                       >
-                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${col.dot} mr-1 align-middle`} />
-                        {cli?.full_name ?? '—'}
+                        <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${col.dot}`} />
+                        <span className="truncate">{clientName(r)}</span>
                       </Link>
                     )
                   })}
-                  {hidden > 0 && (
-                    <p className="text-xs text-gray-400 pl-2">+{hidden} más</p>
+                  {extra > 0 && (
+                    <p className="text-xs text-gray-400 pl-1">+{extra} más</p>
                   )}
                 </div>
-
-                {/* Hover: botón añadir */}
-                <Link
-                  href={`/dashboard/reservas/nueva?start=${d}`}
-                  className="absolute bottom-1.5 right-1.5 z-10 opacity-0 group-hover:opacity-100 transition-opacity w-6 h-6 rounded-full bg-blue-100 hover:bg-blue-200 flex items-center justify-center"
-                  title={`Nueva reserva el ${day}`}
-                >
-                  <svg className="w-3.5 h-3.5 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                  </svg>
-                </Link>
               </div>
             )
           })}
@@ -301,7 +268,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
       </div>
 
       <p className="text-xs text-gray-400 mt-3 text-center">
-        Pasa el mouse sobre un día y haz clic en + para crear una reserva · Clic en una reserva para verla
+        Clic en el número del día para crear una reserva · Clic en una reserva para verla
       </p>
     </div>
   )
