@@ -6,7 +6,10 @@ import { redirect } from 'next/navigation'
 import PrintTrigger from './PrintTrigger'
 import PrintButton from './PrintButton'
 
-interface Props { params: Promise<{ id: string }> }
+interface Props {
+  params: Promise<{ id: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}
 
 function fmt(d: string) {
   return new Date(d).toLocaleString('es-DO', {
@@ -60,19 +63,61 @@ function Field({ label, value, style }: { label: string; value?: string | number
 }
 
 // ─── Fila de seguro ────────────────────────────────────────────────────────
-function InsuranceRow({ label }: { label: string }) {
+function InsuranceRow({ label, price, status }: { label: string; price?: string; status?: 'a' | 'd' | '' }) {
+  const check = '✓'
   return (
     <tr>
       <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '45%' }}>{label}</td>
-      <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%' }}>PRECIO:</td>
-      <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%' }}>ACEPTAR:</td>
-      <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '19%' }}>DECLINAR:</td>
+      <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%' }}>
+        PRECIO: {price ?? ''}
+      </td>
+      <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%', fontWeight: status === 'a' ? 700 : 400 }}>
+        ACEPTAR: {status === 'a' ? check : ''}
+      </td>
+      <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '19%', fontWeight: status === 'd' ? 700 : 400 }}>
+        DECLINAR: {status === 'd' ? check : ''}
+      </td>
     </tr>
   )
 }
 
-export default async function ContratoPrintPage({ params }: Props) {
+export default async function ContratoPrintPage({ params, searchParams }: Props) {
   const { id } = await params
+  const sp = await searchParams
+  // Helper para leer un param de string
+  const p = (key: string) => { const v = sp[key]; return typeof v === 'string' ? v : '' }
+  // Datos del modal que llegan por URL
+  const spFolio        = p('folio')
+  const spAprobacion   = p('aprobacion')
+  const spPreparadoPor = p('preparado_por')
+  const spPago         = p('pago') // 'efectivo' | 'tarjeta' | ''
+  const spD1Lic        = p('d1_lic')
+  const spD1Tel        = p('d1_tel')
+  const spD2Lic        = p('d2_lic')
+  const spD2Tel        = p('d2_tel')
+  const spEdad         = p('edad')
+  const spMascotas     = p('mascotas') === '1'
+  const spAddress      = p('address')
+  const spCity         = p('city')
+  const spState        = p('state')
+  const spZip          = p('zip_code')
+  const spLocalPhone   = p('local_phone')
+  const spLocalAddress = p('local_address')
+  type InsStatus = 'a' | 'd' | ''
+  const ins = (key: string): InsStatus => { const v = p(key); return (v === 'a' || v === 'd') ? v : '' }
+  const segCdw = ins('seg_cdw')
+  const segLia = ins('seg_lia')
+  const segTw  = ins('seg_tw')
+  const segAt  = ins('seg_at')
+  const segPkg = ins('seg_pkg')
+  const segBas = ins('seg_bas')
+  const priceCdw    = p('price_cdw')
+  const priceLia    = p('price_lia')
+  const priceTw     = p('price_tw')
+  const priceAt     = p('price_at')
+  const pricePkg    = p('price_pkg')
+  const priceBas    = p('price_bas')
+  const deductBas   = p('deduct_bas')
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -91,7 +136,7 @@ export default async function ContratoPrintPage({ params }: Props) {
     .from('reservations')
     .select(`
       id, start_date, end_date, status, notes, total_amount,
-      clients ( id, full_name, id_type, id_number, license_number, license_expiry, phone, email ),
+      clients ( id, full_name, id_type, id_number, license_number, license_expiry, passport_number, phone, email, address, city, state, zip_code, local_phone, local_address ),
       vehicles ( id, plates, brand, model, year, color, vin ),
       reservation_extras ( id, extra_type, description )
     `)
@@ -104,8 +149,21 @@ export default async function ContratoPrintPage({ params }: Props) {
   const client = reservation.clients as unknown as {
     full_name: string; id_type: string; id_number: string;
     license_number: string | null; license_expiry: string | null;
-    phone: string | null; email: string | null
+    passport_number: string | null;
+    phone: string | null; email: string | null;
+    address: string | null; city: string | null; state: string | null;
+    zip_code: string | null; local_phone: string | null; local_address: string | null;
   } | null
+  // Dirección: preferir el valor del modal (recién guardado) sobre el de BD
+  const clientAddress      = spAddress      || client?.address      || ''
+  const clientCity         = spCity         || client?.city         || ''
+  const clientState        = spState        || client?.state        || ''
+  const clientZip          = spZip          || client?.zip_code     || ''
+  const clientLocalPhone   = spLocalPhone   || client?.local_phone  || ''
+  const clientLocalAddress = spLocalAddress || client?.local_address || ''
+  // Licencia / Pasaporte
+  const clientLicense  = client?.license_number  || (client?.id_type !== 'passport' ? client?.id_number  : '') || ''
+  const clientPassport = client?.passport_number || (client?.id_type === 'passport'  ? client?.id_number  : '') || ''
 
   const vehicle = reservation.vehicles as unknown as {
     id: string; plates: string; brand: string; model: string;
@@ -236,37 +294,36 @@ export default async function ContratoPrintPage({ params }: Props) {
                   {/* Datos del cliente */}
                   <div className="gap-2">
                     <Field label="NOMBRE" value={client?.full_name} />
-                    <Field label="DIRECCIÓN" value="" />
+                    <Field label="DIRECCIÓN" value={clientAddress} />
                     <div className="grid3">
-                      <Field label="CIUDAD" value="" />
-                      <Field label="ESTADO" value="" />
-                      <Field label="ZIP CODE" value="" />
+                      <Field label="CIUDAD" value={clientCity} />
+                      <Field label="ESTADO" value={clientState} />
+                      <Field label="ZIP CODE" value={clientZip} />
                     </div>
                     <div className="grid2">
-                      <Field label="LICENCIA" value={client?.id_type !== 'passport' ? client?.id_number : ''} />
-                      <Field label="PASAPORTE" value={client?.id_type === 'passport' ? client?.id_number : ''} />
+                      <Field label="LICENCIA" value={clientLicense} />
+                      <Field label="PASAPORTE" value={clientPassport} />
                     </div>
                     <div className="grid2">
                       <Field label="NUM. DE CONTACTO" value={client?.phone} />
-                      <Field label="NUM. DE CONTACTO LOCAL" value="" />
+                      <Field label="NUM. DE CONTACTO LOCAL" value={clientLocalPhone} />
                     </div>
 
                     {/* Conductor adicional 1 */}
                     <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>CONDUCTOR ADICIONAL:</div>
-                    <Field label="LICENCIA" value={extraDriver ? '' : ''} />
                     <div className="grid2">
-                      <Field label="LICENCIA" value="" />
-                      <Field label="NUM. DE CONTACTO" value="" />
+                      <Field label="LICENCIA" value={spD1Lic} />
+                      <Field label="NUM. DE CONTACTO" value={spD1Tel} />
                     </div>
 
                     {/* Conductor adicional 2 */}
                     <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>CONDUCTOR ADICIONAL:</div>
                     <div className="grid2">
-                      <Field label="LICENCIA" value="" />
-                      <Field label="NUM. DE CONTACTO" value="" />
+                      <Field label="LICENCIA" value={spD2Lic} />
+                      <Field label="NUM. DE CONTACTO" value={spD2Tel} />
                     </div>
 
-                    <Field label="DIRECCIÓN LOCAL" value="" />
+                    <Field label="DIRECCIÓN LOCAL" value={clientLocalAddress} />
 
                     {/* Observaciones */}
                     <div>
@@ -312,21 +369,29 @@ export default async function ContratoPrintPage({ params }: Props) {
                       <tr>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>FOLIO DEL DEPST.</div>
-                          <div style={{ minHeight: 12 }} />
+                          <div style={{ minHeight: 12, fontSize: 9 }}>{spFolio}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>NUM. DE APROB.</div>
-                          <div style={{ minHeight: 12 }} />
+                          <div style={{ minHeight: 12, fontSize: 9 }}>{spAprobacion}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>PREPARADO POR:</div>
-                          <div style={{ minHeight: 12 }} />
+                          <div style={{ minHeight: 12, fontSize: 9 }}>{spPreparadoPor}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>FORMA DE PAGO:</div>
                           <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
-                            <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}><span className="box" style={{ width:8, height:8 }}/> EFECTIVO</span>
-                            <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}><span className="box" style={{ width:8, height:8 }}/> TARJETA</span>
+                            <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}>
+                              <span className="box" style={{ width:8, height:8, background: spPago === 'efectivo' ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
+                                {spPago === 'efectivo' ? '✓' : ''}
+                              </span> EFECTIVO
+                            </span>
+                            <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}>
+                              <span className="box" style={{ width:8, height:8, background: spPago === 'tarjeta' ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
+                                {spPago === 'tarjeta' ? '✓' : ''}
+                              </span> TARJETA
+                            </span>
                           </div>
                         </td>
                       </tr>
@@ -364,7 +429,7 @@ export default async function ContratoPrintPage({ params }: Props) {
                     <Field label="FECHA ENTRADA DEL VEHÍCULO" value={fmt(reservation.end_date)} />
                     <div className="grid2">
                       <Field label="VEHÍCULO RETORNA EN LAS MISMAS CONDICIONES" value="" />
-                      <Field label="EDAD DEL CONDUCTOR" value="" />
+                      <Field label="EDAD DEL CONDUCTOR" value={spEdad} />
                     </div>
                     <div className="grid2">
                       <Field label="REEMPLAZO DE VEHÍCULO MARCAR" value="" />
@@ -381,7 +446,10 @@ export default async function ContratoPrintPage({ params }: Props) {
                     <div className="grid2">
                       <Field label="FECHA ENTRADA (REEMPLAZO)" value="" />
                       <div style={{ fontSize: 7.5, display:'flex', alignItems:'center', gap:4 }}>
-                        <span className="box"/><span>CLIENTE TIENE MASCOTAS / PETS:</span>
+                        <span className="box" style={{ background: spMascotas ? '#000' : '#fff', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
+                          {spMascotas ? '✓' : ''}
+                        </span>
+                        <span>CLIENTE TIENE MASCOTAS / PETS:</span>
                       </div>
                     </div>
 
@@ -389,15 +457,15 @@ export default async function ContratoPrintPage({ params }: Props) {
                     <div style={{ marginTop: 3 }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000' }}>
                         <tbody>
-                          <InsuranceRow label="SEGURO DE COLISIÓN — CDW:" />
-                          <InsuranceRow label="SEG. DAÑOS A TERCEROS — LIABILITY:" />
-                          <InsuranceRow label="SEG. GOMAS Y CRISTALES — TIRES AND WINDSHIELD:" />
-                          <InsuranceRow label="SEG. ANTI-ROBOS — ANTI-THEFT:" />
-                          <InsuranceRow label="PAQUETE DE SEGUROS CDW / LIA / TW / AT:" />
+                          <InsuranceRow label="SEGURO DE COLISIÓN — CDW:"                     price={priceCdw} status={segCdw} />
+                          <InsuranceRow label="SEG. DAÑOS A TERCEROS — LIABILITY:"            price={priceLia} status={segLia} />
+                          <InsuranceRow label="SEG. GOMAS Y CRISTALES — TIRES AND WINDSHIELD:" price={priceTw}  status={segTw}  />
+                          <InsuranceRow label="SEG. ANTI-ROBOS — ANTI-THEFT:"                 price={priceAt}  status={segAt}  />
+                          <InsuranceRow label="PAQUETE DE SEGUROS CDW / LIA / TW / AT:"       price={pricePkg} status={segPkg} />
                           <tr>
                             <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '45%' }}>SEGURO BÁSICO — LIA / TW:</td>
-                            <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%' }}>PRECIO:</td>
-                            <td colSpan={2} style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}>DEDUCIBLE:</td>
+                            <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%' }}>PRECIO: {priceBas}</td>
+                            <td colSpan={2} style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}>DEDUCIBLE: {deductBas}</td>
                           </tr>
                         </tbody>
                       </table>

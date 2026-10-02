@@ -285,6 +285,46 @@ export async function removeFromBlacklist(blacklistId: string, clientId: string)
   return { success: true }
 }
 
+// ── Guardar dirección del cliente (desde modal de contrato) ──────────────────
+
+export async function saveClientAddress(
+  _prev: ClientFormState,
+  formData: FormData
+): Promise<ClientFormState> {
+  const clientId = (formData.get('client_id') as string)?.trim()
+  // Si no hay cliente en la reserva, simplemente retornar éxito
+  if (!clientId) return { success: true }
+
+  const ctx = await getContext()
+  if (!ctx) return { error: 'No autorizado' }
+
+  const address      = (formData.get('address')       as string)?.trim() || null
+  const city         = (formData.get('city')           as string)?.trim() || null
+  const state_       = (formData.get('state')          as string)?.trim() || null
+  const zip_code     = (formData.get('zip_code')       as string)?.trim() || null
+  const local_phone  = (formData.get('local_phone')    as string)?.trim() || null
+  const local_address = (formData.get('local_address') as string)?.trim() || null
+
+  const { error } = await ctx.supabase
+    .from('clients')
+    .update({
+      address,
+      city,
+      state: state_,
+      zip_code,
+      local_phone,
+      local_address,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', clientId)
+    .eq('tenant_id', ctx.tenantId)
+
+  if (error) return { error: error.message }
+
+  revalidatePath(`/dashboard/clientes/${clientId}`)
+  return { success: true }
+}
+
 // ── Crear cliente rápido (desde modal en nueva reserva) ───────────────────────
 // Igual que createClient_ pero devuelve los datos del cliente creado en vez de redirigir.
 
