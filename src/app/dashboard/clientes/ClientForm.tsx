@@ -25,6 +25,11 @@ interface Client {
   license_number?: string | null
   license_expiry?: string | null
   passport_number?: string | null
+  passport_expiry?: string | null
+  address?: string | null
+  city?: string | null
+  state?: string | null
+  zip_code?: string | null
   notes?: string | null
 }
 
@@ -56,6 +61,11 @@ export default function ClientForm({ action, state, pending, client, title, subm
   const [licenseNumber,   setLicenseNumber]   = useState(state.values?.license_number   ?? client?.license_number   ?? '')
   const [licenseExpiry,   setLicenseExpiry]   = useState(state.values?.license_expiry   ?? client?.license_expiry?.split('T')[0] ?? '')
   const [passportNumber,  setPassportNumber]  = useState(state.values?.passport_number  ?? client?.passport_number  ?? '')
+  const [passportExpiry,  setPassportExpiry]  = useState(state.values?.passport_expiry  ?? client?.passport_expiry?.split('T')[0] ?? '')
+  const [address,         setAddress]         = useState(state.values?.address          ?? client?.address          ?? '')
+  const [city,            setCity]            = useState(state.values?.city             ?? client?.city             ?? '')
+  const [stateField,      setStateField]      = useState(state.values?.state            ?? client?.state            ?? '')
+  const [zipCode,         setZipCode]         = useState(state.values?.zip_code         ?? client?.zip_code         ?? '')
   const [notes,           setNotes]           = useState(state.values?.notes            ?? client?.notes            ?? '')
 
   // Filtrar input de teléfono: solo dígitos, guiones y espacios
@@ -86,6 +96,11 @@ export default function ClientForm({ action, state, pending, client, title, subm
         <input type="hidden" name="license_number"  value={licenseNumber} />
         <input type="hidden" name="license_expiry"  value={licenseExpiry} />
         <input type="hidden" name="passport_number" value={passportNumber} />
+        <input type="hidden" name="passport_expiry" value={passportExpiry} />
+        <input type="hidden" name="address"         value={address} />
+        <input type="hidden" name="city"            value={city} />
+        <input type="hidden" name="state"           value={stateField} />
+        <input type="hidden" name="zip_code"        value={zipCode} />
         <input type="hidden" name="notes"           value={notes} />
 
         {state.error && (
@@ -195,16 +210,85 @@ export default function ClientForm({ action, state, pending, client, title, subm
           {/* Pasaporte */}
           <div>
             <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Pasaporte</p>
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Número de pasaporte</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Número de pasaporte</label>
+                <input
+                  type="text"
+                  value={passportNumber}
+                  onChange={e => setPassportNumber(e.target.value.toUpperCase())}
+                  disabled={pending}
+                  maxLength={30}
+                  placeholder="AB1234567"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50 uppercase"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Vencimiento</label>
+                <input
+                  type="date"
+                  value={passportExpiry}
+                  onChange={e => setPassportExpiry(e.target.value)}
+                  disabled={pending}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Dirección */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+          <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Dirección</h2>
+
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Calle / Dirección</label>
+            <input
+              type="text"
+              value={address}
+              onChange={e => setAddress(e.target.value)}
+              disabled={pending}
+              maxLength={200}
+              placeholder="Calle Principal 123, Apt 4B"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-1">
+              <label className="block text-xs text-gray-600 mb-1">Ciudad</label>
               <input
                 type="text"
-                value={passportNumber}
-                onChange={e => setPassportNumber(e.target.value.toUpperCase())}
+                value={city}
+                onChange={e => setCity(e.target.value)}
                 disabled={pending}
-                maxLength={30}
-                placeholder="AB1234567"
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50 uppercase"
+                maxLength={100}
+                placeholder="Santo Domingo"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div className="sm:col-span-1">
+              <label className="block text-xs text-gray-600 mb-1">Estado / Provincia</label>
+              <input
+                type="text"
+                value={stateField}
+                onChange={e => setStateField(e.target.value)}
+                disabled={pending}
+                maxLength={100}
+                placeholder="Distrito Nacional"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50"
+              />
+            </div>
+            <div className="sm:col-span-1">
+              <label className="block text-xs text-gray-600 mb-1">Código postal</label>
+              <input
+                type="text"
+                value={zipCode}
+                onChange={e => setZipCode(e.target.value)}
+                disabled={pending}
+                maxLength={20}
+                placeholder="10101"
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50"
               />
             </div>
           </div>

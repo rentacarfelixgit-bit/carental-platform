@@ -22,6 +22,12 @@ interface ClientData {
   email: string | null
   license_number: string | null
   license_expiry: string | null
+  passport_number: string | null
+  passport_expiry: string | null
+  address: string | null
+  city: string | null
+  state: string | null
+  zip_code: string | null
   notes: string | null
 }
 

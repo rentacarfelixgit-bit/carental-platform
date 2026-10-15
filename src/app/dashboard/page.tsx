@@ -1,5 +1,8 @@
 import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
+import { rentalFolio } from '@/lib/rentalLabels'
+import EventChip from './reservas/calendario/EventChip'
+import { EVENT_PEOPLE_SELECT, eventPeople, type CalendarEventRow, type CalendarEventType } from '@/lib/calendarEvents'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -35,19 +38,26 @@ export default async function DashboardPage() {
   const firstOfMonth = firstOfMonthStr + 'T00:00:00'
 
   // Conteos para las tarjetas
+  // Reservas (origin = reservation) y contratos de mostrador (origin = walk_in) se cuentan por separado
   const [
     { count: totalVehiculos },
     { count: reservasActivas },
+    { count: contratosAbiertos },
     { count: totalClientes },
     { count: contratosEsteMes },
   ] = await Promise.all([
     supabase.from('vehicles').select('*', { count: 'exact', head: true }).neq('status', 'maintenance'),
     supabase.from('reservations').select('*', { count: 'exact', head: true })
+      .eq('origin', 'reservation')
       .lte('start_date', todayStr)
       .gte('end_date', todayStr)
       .in('status', ['pending', 'confirmed', 'active']),
+    supabase.from('reservations').select('*', { count: 'exact', head: true })
+      .eq('origin', 'walk_in')
+      .in('status', ['confirmed', 'active']),
     supabase.from('clients').select('*', { count: 'exact', head: true }),
     supabase.from('reservations').select('*', { count: 'exact', head: true })
+      .eq('origin', 'walk_in')
       .gte('created_at', firstOfMonth)
       .neq('status', 'cancelled'),
   ])
@@ -55,7 +65,7 @@ export default async function DashboardPage() {
   // Reservas que salen hoy
   const { data: salidasHoy } = await supabase
     .from('reservations')
-    .select('id, start_date, end_date, clients(full_name), vehicles(brand, model, plates)')
+    .select('id, number, origin, start_date, end_date, clients(full_name), vehicles(brand, model, plates)')
     .gte('start_date', todayStr)
     .lt('start_date', tomorrowStr)
     .in('status', ['pending', 'confirmed', 'active'])
@@ -65,12 +75,31 @@ export default async function DashboardPage() {
   // Reservas que regresan hoy
   const { data: retornosHoy } = await supabase
     .from('reservations')
-    .select('id, start_date, end_date, clients(full_name), vehicles(brand, model, plates)')
+    .select('id, number, origin, start_date, end_date, clients(full_name), vehicles(brand, model, plates)')
     .gte('end_date', todayStr)
     .lt('end_date', tomorrowStr)
     .in('status', ['pending', 'confirmed', 'active'])
     .order('end_date')
     .limit(5)
+
+  // Agenda de hoy: eventos del calendario (pendientes primero)
+  const { data: rawTodayEvents } = await supabase
+    .from('calendar_events')
+    .select(`id, type, title, notes, event_date, event_time, reservation_id, done, ${EVENT_PEOPLE_SELECT}, reservations ( number, origin, clients ( full_name ) )`)
+    .eq('event_date', todayStr)
+    .order('done')
+    .order('event_time', { ascending: true, nullsFirst: true })
+
+  const todayEvents: CalendarEventRow[] = (rawTodayEvents ?? []).map(e => {
+    const r = e.reservations as unknown as { number: number; origin: string; clients: { full_name: string } | null } | null
+    return {
+      id: e.id, type: e.type as CalendarEventType, title: e.title, notes: e.notes,
+      event_date: e.event_date, event_time: e.event_time, reservation_id: e.reservation_id, done: e.done,
+      ...eventPeople(e as unknown as Record<string, unknown>),
+      rental_label: r ? [rentalFolio(r.origin, r.number), r.clients?.full_name].filter(Boolean).join(' · ') : null,
+    }
+  })
+  const pendingToday = todayEvents.filter(e => !e.done).length
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -80,7 +109,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* Tarjetas de resumen */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
         <StatCard
           label="Vehículos disponibles"
           value={totalVehiculos ?? 0}
@@ -96,6 +125,13 @@ export default async function DashboardPage() {
           color="green"
         />
         <StatCard
+          label="Contratos abiertos"
+          value={contratosAbiertos ?? 0}
+          icon="document"
+          href="/dashboard/contratos"
+          color="orange"
+        />
+        <StatCard
           label="Clientes registrados"
           value={totalClientes ?? 0}
           icon="users"
@@ -106,8 +142,8 @@ export default async function DashboardPage() {
           label="Contratos este mes"
           value={contratosEsteMes ?? 0}
           icon="document"
-          href="/dashboard/reservas"
-          color="orange"
+          href="/dashboard/contratos"
+          color="blue"
         />
       </div>
 
@@ -128,6 +164,9 @@ export default async function DashboardPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-800 truncate font-medium">
                         {r.clients?.full_name ?? 'Cliente'}
+                        <span className={`ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded ${r.origin === 'walk_in' ? 'bg-purple-50 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {rentalFolio(r.origin, r.number)}
+                        </span>
                       </p>
                       <p className="text-xs text-gray-500 truncate">
                         {r.vehicles?.brand} {r.vehicles?.model} · {r.vehicles?.plates}
@@ -158,6 +197,9 @@ export default async function DashboardPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-gray-800 truncate font-medium">
                         {r.clients?.full_name ?? 'Cliente'}
+                        <span className={`ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded ${r.origin === 'walk_in' ? 'bg-purple-50 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {rentalFolio(r.origin, r.number)}
+                        </span>
                       </p>
                       <p className="text-xs text-gray-500 truncate">
                         {r.vehicles?.brand} {r.vehicles?.model} · {r.vehicles?.plates}
@@ -172,6 +214,34 @@ export default async function DashboardPage() {
             <p className="text-sm text-gray-400">No hay retornos programados para hoy.</p>
           )}
         </div>
+      </div>
+
+      {/* Agenda de hoy (eventos del calendario) */}
+      <div className="mt-6 bg-white border border-gray-200 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-gray-900">
+            Agenda de hoy
+            {pendingToday > 0 && (
+              <span className="ml-2 text-xs font-medium text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded-full">
+                {pendingToday} pendiente{pendingToday !== 1 ? 's' : ''}
+              </span>
+            )}
+          </h2>
+          <Link href="/dashboard/reservas/calendario" className="text-xs text-blue-600 hover:underline">Ver calendario</Link>
+        </div>
+        {todayEvents.length > 0 ? (
+          <ul className="space-y-1.5">
+            {todayEvents.map(ev => (
+              <li key={ev.id} className="flex items-center gap-3">
+                <div className="flex-1 min-w-0"><EventChip event={ev} size="md" /></div>
+                {ev.rental_label && <span className="hidden sm:block text-xs text-gray-400 truncate max-w-[40%]">{ev.rental_label}</span>}
+                {ev.done && ev.done_by_name && <span className="flex-shrink-0 text-xs text-green-700">✓ {ev.done_by_name}</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-gray-400">Sin eventos para hoy. Agrégalos desde el calendario con el botón +.</p>
+        )}
       </div>
     </div>
   )

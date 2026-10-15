@@ -15,6 +15,11 @@ const ClientSchema = z.object({
   license_number:  z.string().trim().max(30).optional().transform(v => v || null),
   license_expiry:  z.string().optional().transform(v => v || null),
   passport_number: z.string().trim().max(30).optional().transform(v => v || null),
+  passport_expiry: z.string().optional().transform(v => v || null),
+  address:         z.string().trim().max(200).optional().transform(v => v || null),
+  city:            z.string().trim().max(100).optional().transform(v => v || null),
+  state:           z.string().trim().max(100).optional().transform(v => v || null),
+  zip_code:        z.string().trim().max(20).optional().transform(v => v || null),
   notes:           z.string().trim().max(2000).optional().transform(v => v || null),
 })
 
@@ -24,7 +29,13 @@ export type ClientFormState = {
   values?: Record<string, string>
   success?: boolean
   /** Solo en createClientQuick — datos del cliente recién creado */
-  newClient?: { id: string; full_name: string; id_number: string }
+  newClient?: {
+    id: string; full_name: string; id_number: string
+    phone: string | null; email: string | null
+    license_number: string | null; license_expiry: string | null
+    passport_number: string | null; passport_expiry: string | null
+    address: string | null; city: string | null; state: string | null; zip_code: string | null
+  }
 }
 
 function getValues(formData: FormData): Record<string, string> {
@@ -119,6 +130,11 @@ export async function createClient_(
     license_number,
     license_expiry:  parsed.data.license_expiry,
     passport_number,
+    passport_expiry: parsed.data.passport_expiry,
+    address:         parsed.data.address,
+    city:            parsed.data.city,
+    state:           parsed.data.state,
+    zip_code:        parsed.data.zip_code,
     notes:           parsed.data.notes,
     tenant_id:       ctx.tenantId,
     created_by:      ctx.user.id,
@@ -210,6 +226,11 @@ export async function updateClient(
       license_number,
       license_expiry:  parsed.data.license_expiry,
       passport_number,
+      passport_expiry: parsed.data.passport_expiry,
+      address:         parsed.data.address,
+      city:            parsed.data.city,
+      state:           parsed.data.state,
+      zip_code:        parsed.data.zip_code,
       notes:           parsed.data.notes,
       updated_at:      new Date().toISOString(),
     })
@@ -383,12 +404,17 @@ export async function createClientQuick(
       license_number,
       license_expiry:  parsed.data.license_expiry,
       passport_number,
+      passport_expiry: parsed.data.passport_expiry,
+      address:         parsed.data.address,
+      city:            parsed.data.city,
+      state:           parsed.data.state,
+      zip_code:        parsed.data.zip_code,
       notes:           parsed.data.notes,
       tenant_id:       ctx.tenantId,
       created_by:      ctx.user.id,
       updated_at:      new Date().toISOString(),
     })
-    .select('id, full_name, id_number')
+    .select('id, full_name, id_number, phone, email, license_number, license_expiry, passport_number, passport_expiry, address, city, state, zip_code')
     .single()
 
   if (error) {

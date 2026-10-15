@@ -6,7 +6,8 @@ import { useActionState, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createInspection } from '../actions'
 import DamageMap, { type DamagePoint } from './DamageMap'
-import PhotoUploader from './PhotoUploader'
+import PhotoUploader, { type InspectionPhotoInput } from './PhotoUploader'
+import { REQUIRED_INSPECTION_ANGLES, angleLabel } from '@/lib/photoAngles'
 import Link from 'next/link'
 import type { BaselinePhoto } from './page'
 
@@ -18,15 +19,6 @@ const FUEL_LABELS: Record<string, string> = {
   empty:           'Vacío',
 }
 
-const ANGLE_LABELS: Record<string, string> = {
-  front:    'Frente',
-  rear:     'Trasera',
-  left:     'Lateral izq.',
-  right:    'Lateral der.',
-  interior: 'Interior',
-  other:    'Otro',
-}
-
 interface Props {
   reservationId: string
   type: 'checkout' | 'checkin'
@@ -34,9 +26,11 @@ interface Props {
   tenantId: string
   inspectionId: string          // UUID pre-generado para subir fotos antes del submit
   baselinePhotos: BaselinePhoto[]
+  /** Si la inspección es parte de un cambio de vehículo */
+  swapId?: string | null
 }
 
-export default function InspeccionForm({ reservationId, type, vehicleLabel, tenantId, inspectionId, baselinePhotos }: Props) {
+export default function InspeccionForm({ reservationId, type, vehicleLabel, tenantId, inspectionId, baselinePhotos, swapId = null }: Props) {
   const searchParams = useSearchParams()
   const preOdometer  = searchParams.get('odometer') ?? ''
   const preFuel      = searchParams.get('fuel') ?? ''
@@ -44,29 +38,44 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
   const boundCreate = createInspection.bind(null, reservationId, inspectionId)
   const [state, action, pending] = useActionState(boundCreate, {})
   const [damagePoints, setDamagePoints] = useState<DamagePoint[]>([])
-  const [photoPaths,   setPhotoPaths]   = useState<string[]>([])
+  const [photos,       setPhotos]       = useState<InspectionPhotoInput[]>([])
 
   // null = sin respuesta, true = mismo estado, false = hay cambios
   const [sameCondition, setSameCondition] = useState<boolean | null>(null)
 
   const isCheckout   = type === 'checkout'
-  const title        = isCheckout ? 'Inspección de entrega (checkout)' : 'Inspección de recepción (check-in)'
+  const title        = swapId
+    ? (isCheckout ? 'Cambio de vehículo · Entrega del vehículo nuevo' : 'Cambio de vehículo · Recepción del vehículo actual')
+    : (isCheckout ? 'Inspección de entrega (checkout)' : 'Inspección de recepción (check-in)')
+  const backHref     = swapId ? `/dashboard/reservas/${reservationId}/cambio-vehiculo` : `/dashboard/reservas/${reservationId}/inspecciones`
   const hasBaseline  = baselinePhotos.length > 0
 
   // Si hay fotos base y el usuario confirmó mismo estado, no se requieren fotos nuevas
   const needsPhotos = !hasBaseline || sameCondition === false
 
+  // Sin fotos base → juego completo: los 4 ángulos exteriores son obligatorios.
+  // Con fotos base y cambios → basta con documentar los cambios (al menos 1 foto).
+  const requiredAngles = hasBaseline ? [] : REQUIRED_INSPECTION_ANGLES
+  const coveredAngles  = new Set(photos.map(p => p.angle))
+  const missingAngles  = requiredAngles.filter(a => !coveredAngles.has(a))
+  const photosBlocker  =
+    hasBaseline && sameCondition === null ? 'Indica si el vehículo está en el mismo estado que las fotos registradas.'
+    : !needsPhotos ? null
+    : missingAngles.length > 0 ? `Faltan fotos: ${missingAngles.map(a => angleLabel(a)).join(', ')}.`
+    : photos.length === 0 ? 'Agrega al menos una foto de los cambios detectados.'
+    : null
+
   return (
     <div className="p-6 max-w-2xl mx-auto">
       <div className="mb-6">
         <Link
-          href={`/dashboard/reservas/${reservationId}/inspecciones`}
+          href={backHref}
           className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
           </svg>
-          Inspecciones
+          {swapId ? 'Cambio de vehículo' : 'Inspecciones'}
         </Link>
         <h1 className="text-xl font-semibold text-gray-900">{title}</h1>
         <p className="text-sm text-gray-500 mt-0.5">{vehicleLabel}</p>
@@ -76,8 +85,10 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
         {/* Campos ocultos */}
         <input type="hidden" name="type"          value={type} />
         <input type="hidden" name="inspection_id" value={inspectionId} />
+        {swapId && <input type="hidden" name="swap_id" value={swapId} />}
         <input type="hidden" name="damage_points" value={JSON.stringify(damagePoints)} />
-        <input type="hidden" name="photo_paths"   value={JSON.stringify(photoPaths)} />
+        <input type="hidden" name="photos"         value={JSON.stringify(photos)} />
+        <input type="hidden" name="same_condition" value={sameCondition === null ? '' : String(sameCondition)} />
 
         {state.error && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
@@ -145,12 +156,12 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={photo.signedUrl}
-                    alt={photo.angle ? (ANGLE_LABELS[photo.angle] ?? photo.angle) : 'Foto'}
+                    alt={angleLabel(photo.angle) ?? 'Foto'}
                     className="w-full h-full object-cover"
                   />
                   {photo.angle && (
                     <span className="absolute bottom-1 left-1 px-1.5 py-0.5 text-xs font-medium bg-black/60 text-white rounded">
-                      {ANGLE_LABELS[photo.angle] ?? photo.angle}
+                      {angleLabel(photo.angle) ?? photo.angle}
                     </span>
                   )}
                 </div>
@@ -165,7 +176,7 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={() => { setSameCondition(true); setPhotoPaths([]) }}
+                  onClick={() => { setSameCondition(true); setPhotos([]) }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 text-sm rounded-lg border transition-colors font-medium ${
                     sameCondition === true
                       ? 'bg-green-600 border-green-600 text-white'
@@ -227,7 +238,8 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
             <PhotoUploader
               inspectionId={inspectionId}
               tenantId={tenantId}
-              onChange={setPhotoPaths}
+              onChange={setPhotos}
+              requiredAngles={requiredAngles}
             />
           </div>
         )}
@@ -245,16 +257,19 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
         </div>
 
         {/* Acciones */}
+        {photosBlocker && (
+          <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{photosBlocker}</p>
+        )}
         <div className="flex gap-3">
           <Link
-            href={`/dashboard/reservas/${reservationId}/inspecciones`}
+            href={backHref}
             className="flex-1 text-center py-2.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
           >
             Cancelar
           </Link>
           <button
             type="submit"
-            disabled={pending}
+            disabled={pending || !!photosBlocker}
             className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors disabled:opacity-60"
           >
             {pending ? (

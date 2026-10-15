@@ -32,9 +32,24 @@ const ACTIONS_BY_STATUS: Record<string, Action[]> = {
   ],
 }
 
+// Contrato de mostrador: nace en "confirmed" (abierto, por entregar)
+const CONTRACT_ACTIONS_BY_STATUS: Record<string, Action[]> = {
+  confirmed: [
+    { label: 'Entregar vehículo (En uso)', status: 'active',    className: 'bg-green-600 hover:bg-green-700 text-white' },
+    { label: 'Cancelar contrato',          status: 'cancelled', className: 'border border-red-200 text-red-600 hover:bg-red-50', confirm: '¿Cancelar este contrato? El vehículo quedará disponible.' },
+  ],
+  active: [
+    { label: 'Cerrar contrato', status: 'completed', className: 'bg-gray-700 hover:bg-gray-800 text-white' },
+  ],
+}
+
 interface Props {
   reservationId: string
   currentStatus: string
+  /** reservation | walk_in */
+  origin?: string
+  /** Equipos entregados que aún no se devuelven (se avisa antes de cerrar) */
+  pendingEquipment?: number
   isAdmin: boolean
   hasCheckout: boolean
   hasCheckin: boolean
@@ -43,6 +58,8 @@ interface Props {
 export default function ReservationActions({
   reservationId,
   currentStatus,
+  origin = 'reservation',
+  pendingEquipment = 0,
   isAdmin,
   hasCheckout,
   hasCheckin,
@@ -50,7 +67,7 @@ export default function ReservationActions({
   const [pending, startTransition] = useTransition()
   const [gateType, setGateType] = useState<'checkout' | 'checkin' | null>(null)
 
-  const actions = ACTIONS_BY_STATUS[currentStatus] ?? []
+  const actions = (origin === 'walk_in' ? CONTRACT_ACTIONS_BY_STATUS : ACTIONS_BY_STATUS)[currentStatus] ?? []
 
   // Confirmar requiere admin
   const visibleActions = isAdmin
@@ -60,6 +77,12 @@ export default function ReservationActions({
   if (visibleActions.length === 0) return null
 
   function handleAction(action: Action) {
+    // Antes de cerrar: avisar si hay equipo (GPS, silla, etc.) sin devolver
+    if (action.status === 'completed' && pendingEquipment > 0 &&
+        !confirm(`Hay ${pendingEquipment} equipo${pendingEquipment !== 1 ? 's' : ''} sin devolver. Registra su devolución en "Equipo y cargos" antes de cerrar.\n\n¿Cerrar de todos modos?`)) {
+      return
+    }
+
     // Transición a "en curso": requiere inspección de salida
     if (action.status === 'active' && !hasCheckout) {
       setGateType('checkout')

@@ -4,6 +4,7 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { CONTRACT_STATUS, rentalFolio, statusStyle } from '@/lib/rentalLabels'
 
 const STATUS_VEHICLE_LABELS: Record<string, string> = {
   available:   'Disponibles',
@@ -43,12 +44,14 @@ function defaultRange() {
 const FLEET_PAGE_SIZE = 10
 
 interface Props {
-  searchParams: Promise<{ desde?: string; hasta?: string; pagina_flota?: string }>
+  searchParams: Promise<{ desde?: string; hasta?: string; pagina_flota?: string; tipo?: string }>
 }
 
 export default async function ReportesPage({ searchParams }: Props) {
   const defaults = defaultRange()
-  const { desde = defaults.start, hasta = defaults.end, pagina_flota } = await searchParams
+  const { desde = defaults.start, hasta = defaults.end, pagina_flota, tipo: tipoParam } = await searchParams
+  // Filtro de la tabla del período: todas | reservas | contratos
+  const tipo = tipoParam === 'reservas' || tipoParam === 'contratos' ? tipoParam : 'todas'
   const pageFlota = Math.max(1, parseInt(pagina_flota ?? '1', 10) || 1)
 
   const supabase = await createClient()
@@ -80,10 +83,10 @@ export default async function ReportesPage({ searchParams }: Props) {
       .eq('tenant_id', tid)
       .eq('active', true),
 
-    // Reservas agrupadas por estado (todas)
+    // Reservas y contratos agrupados por estado (todas)
     supabase
       .from('reservations')
-      .select('status')
+      .select('status, origin')
       .eq('tenant_id', tid),
 
     // Total clientes
@@ -92,19 +95,24 @@ export default async function ReportesPage({ searchParams }: Props) {
       .select('id', { count: 'exact', head: true })
       .eq('tenant_id', tid),
 
-    // Reservas cuyo inicio cae dentro del período seleccionado
-    supabase
-      .from('reservations')
-      .select(`
-        id, status, start_date, end_date, created_at,
-        clients ( full_name ),
-        vehicles ( plates, brand, model )
-      `)
-      .eq('tenant_id', tid)
-      .gte('start_date', `${desde}T00:00:00`)
-      .lte('start_date', `${hasta}T23:59:59`)
-      .order('start_date', { ascending: false })
-      .limit(50),
+    // Reservas / contratos cuyo inicio cae dentro del período seleccionado
+    (() => {
+      let q = supabase
+        .from('reservations')
+        .select(`
+          id, number, origin, status, start_date, end_date, created_at,
+          clients ( full_name ),
+          vehicles ( plates, brand, model )
+        `)
+        .eq('tenant_id', tid)
+        .gte('start_date', `${desde}T00:00:00`)
+        .lte('start_date', `${hasta}T23:59:59`)
+        .order('start_date', { ascending: false })
+        .limit(50)
+      if (tipo === 'reservas')  q = q.eq('origin', 'reservation')
+      if (tipo === 'contratos') q = q.eq('origin', 'walk_in')
+      return q
+    })(),
 
     // Utilización de flota: reservas y días por vehículo
     supabase
@@ -134,13 +142,16 @@ export default async function ReportesPage({ searchParams }: Props) {
     vehicleStatusCount[v.status] = (vehicleStatusCount[v.status] ?? 0) + 1
   })
 
-  // Agrupar reservas por estado
+  // Agrupar por estado, separando reservas y contratos de mostrador
   const resStatusCount: Record<string, number> = {}
-  ;(reservationsByStatus ?? []).forEach((r: { status: string }) => {
-    resStatusCount[r.status] = (resStatusCount[r.status] ?? 0) + 1
+  const conStatusCount: Record<string, number> = {}
+  ;(reservationsByStatus ?? []).forEach((r: { status: string; origin: string }) => {
+    const bucket = r.origin === 'walk_in' ? conStatusCount : resStatusCount
+    bucket[r.status] = (bucket[r.status] ?? 0) + 1
   })
 
   const activeReservations = (resStatusCount.pending ?? 0) + (resStatusCount.confirmed ?? 0) + (resStatusCount.active ?? 0)
+  const openContracts      = (conStatusCount.confirmed ?? 0) + (conStatusCount.active ?? 0)
 
   // Calcular utilización de flota
   type VehicleRow = {
@@ -172,6 +183,7 @@ export default async function ReportesPage({ searchParams }: Props) {
 
   function fleetPageUrl(p: number) {
     const qs = new URLSearchParams({ desde, hasta, pagina_flota: String(p) })
+    if (tipo !== 'todas') qs.set('tipo', tipo)
     return `/dashboard/reportes?${qs}`
   }
 
@@ -212,7 +224,7 @@ export default async function ReportesPage({ searchParams }: Props) {
       {/* ── 1. Resumen en tiempo real ─────────────────────────────────────── */}
       <section>
         <h2 className="text-sm font-medium text-gray-700 mb-4">Resumen actual</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           {/* Total vehículos activos */}
           <div className="bg-white border border-gray-200 rounded-xl p-4">
             <p className="text-xs text-gray-400 mb-1">Vehículos activos</p>
@@ -224,6 +236,11 @@ export default async function ReportesPage({ searchParams }: Props) {
           <div className="bg-white border border-gray-200 rounded-xl p-4">
             <p className="text-xs text-gray-400 mb-1">Reservas vigentes</p>
             <p className="text-2xl font-bold text-blue-600">{activeReservations}</p>
+          </div>
+          {/* Contratos abiertos */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <p className="text-xs text-gray-400 mb-1">Contratos abiertos</p>
+            <p className="text-2xl font-bold text-green-600">{openContracts}</p>
           </div>
           {/* Total clientes */}
           <div className="bg-white border border-gray-200 rounded-xl p-4">
@@ -252,12 +269,26 @@ export default async function ReportesPage({ searchParams }: Props) {
         </div>
 
         {/* Reservas por estado */}
-        <div className="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <h3 className="mt-5 mb-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Reservas por estado</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {Object.entries(STATUS_RES_LABELS).map(([status, label]) => (
             <div key={status} className="bg-white border border-gray-200 rounded-xl p-3 text-center">
               <p className="text-xl font-bold text-gray-900">{resStatusCount[status] ?? 0}</p>
               <span className={`inline-block mt-1 text-xs px-2 py-0.5 rounded-full ${STATUS_RES_COLORS[status]}`}>
                 {label}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        {/* Contratos por estado */}
+        <h3 className="mt-5 mb-2 text-xs font-medium text-gray-500 uppercase tracking-wide">Contratos de mostrador por estado</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {Object.entries(CONTRACT_STATUS).map(([status, cfg]) => (
+            <div key={status} className="bg-white border border-gray-200 rounded-xl p-3 text-center">
+              <p className="text-xl font-bold text-gray-900">{conStatusCount[status] ?? 0}</p>
+              <span className={`inline-block mt-1 text-xs px-2 py-0.5 rounded-full ${cfg.className}`}>
+                {cfg.label}
               </span>
             </div>
           ))}
@@ -268,7 +299,7 @@ export default async function ReportesPage({ searchParams }: Props) {
       <section>
         <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
           <h2 className="text-sm font-medium text-gray-700">
-            Reservas con salida en el período
+            {tipo === 'contratos' ? 'Contratos' : tipo === 'reservas' ? 'Reservas' : 'Reservas y contratos'} con salida en el período
             <span className="ml-2 text-gray-400 font-normal">({reservationsInPeriod?.length ?? 0} resultados)</span>
           </h2>
           <form method="GET" action="/dashboard/reportes" className="flex items-center gap-2">
@@ -285,6 +316,15 @@ export default async function ReportesPage({ searchParams }: Props) {
               defaultValue={hasta}
               className="text-sm px-3 py-1.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+            <select
+              name="tipo"
+              defaultValue={tipo}
+              className="text-sm px-2 py-1.5 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="todas">Todas</option>
+              <option value="reservas">Solo reservas</option>
+              <option value="contratos">Solo contratos</option>
+            </select>
             <button type="submit" className="text-sm px-3 py-1.5 bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-colors">
               Filtrar
             </button>
@@ -296,6 +336,7 @@ export default async function ReportesPage({ searchParams }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">No.</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Cliente</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Vehículo</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Período</th>
@@ -312,6 +353,12 @@ export default async function ReportesPage({ searchParams }: Props) {
                   )
                   return (
                     <tr key={r.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <span className="font-mono text-xs text-gray-700">{rentalFolio(r.origin, r.number)}</span>
+                        <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded ${r.origin === 'walk_in' ? 'bg-purple-50 text-purple-700' : 'bg-gray-100 text-gray-500'}`}>
+                          {r.origin === 'walk_in' ? 'Contrato' : 'Reserva'}
+                        </span>
+                      </td>
                       <td className="px-4 py-2.5 font-medium text-gray-900">{c?.full_name ?? '—'}</td>
                       <td className="px-4 py-2.5 hidden sm:table-cell text-gray-600">
                         {v?.brand} {v?.model}
@@ -321,8 +368,8 @@ export default async function ReportesPage({ searchParams }: Props) {
                         {new Date(r.start_date).toLocaleDateString('es-MX')} · {nights}d
                       </td>
                       <td className="px-4 py-2.5">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_RES_COLORS[r.status]}`}>
-                          {STATUS_RES_LABELS[r.status] ?? r.status}
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusStyle(r.status, r.origin).className}`}>
+                          {statusStyle(r.status, r.origin).label}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-right">
@@ -336,7 +383,7 @@ export default async function ReportesPage({ searchParams }: Props) {
               </tbody>
             </table>
           ) : (
-            <p className="text-center py-10 text-sm text-gray-400">Sin reservas en ese período.</p>
+            <p className="text-center py-10 text-sm text-gray-400">Sin resultados en ese período.</p>
           )}
         </div>
       </section>

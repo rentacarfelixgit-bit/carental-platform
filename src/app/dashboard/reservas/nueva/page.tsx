@@ -1,53 +1,32 @@
 // src/app/dashboard/reservas/nueva/page.tsx
-// Carga los clientes del tenant en el servidor y los pasa al formulario cliente.
-// Si viene desde el calendario, los params start/end/vehicle pre-llenan el form.
+// Nueva reserva. Si viene desde el calendario, los params start/end/vehicle pre-llenan el form.
 
-import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
 import NuevaReservaForm from './NuevaReservaForm'
+import { loadRentalFormData } from './loadFormData'
 
 interface Props {
   searchParams: Promise<{ start?: string; end?: string; vehicle?: string }>
 }
 
+// Convertir fecha sola (YYYY-MM-DD) a datetime-local (YYYY-MM-DDTHH:MM)
+function toDatetime(val?: string, defaultTime = '08:00') {
+  if (!val) return ''
+  if (val.includes('T')) return val          // ya tiene hora
+  if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return `${val}T${defaultTime}`
+  return val
+}
+
 export default async function NuevaReservaPage({ searchParams }: Props) {
   const { start, end, vehicle } = await searchParams
-
-  // Convertir fecha sola (YYYY-MM-DD) a datetime-local (YYYY-MM-DDTHH:MM)
-  function toDatetime(val?: string, defaultTime = '08:00') {
-    if (!val) return ''
-    if (val.includes('T')) return val          // ya tiene hora
-    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return `${val}T${defaultTime}`
-    return val
-  }
-
-  const initialStart = toDatetime(start, '08:00')
-  const initialEnd   = toDatetime(end,   '08:00')
-
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  const { data: profile } = await supabase
-    .from('users')
-    .select('tenant_id')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile?.tenant_id) redirect('/login')
-
-  const { data: clients } = await supabase
-    .from('clients')
-    .select('id, full_name, id_number')
-    .eq('tenant_id', profile.tenant_id)
-    .order('full_name')
+  const { clients, defaultPrices } = await loadRentalFormData()
 
   return (
     <NuevaReservaForm
-      clients={clients ?? []}
-      initialStartDate={initialStart}
-      initialEndDate={initialEnd}
+      clients={clients}
+      initialStartDate={toDatetime(start, '08:00')}
+      initialEndDate={toDatetime(end, '08:00')}
       initialVehicleId={vehicle ?? ''}
+      defaultPrices={defaultPrices}
     />
   )
 }

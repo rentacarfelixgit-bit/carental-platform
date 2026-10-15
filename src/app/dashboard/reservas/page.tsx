@@ -1,10 +1,12 @@
 // src/app/dashboard/reservas/page.tsx
 // Lista de reservas con filtro por estado y paginación — Server Component
+// Solo reservas (origin = reservation). Los contratos de mostrador viven en /dashboard/contratos.
 
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import StatusBadge, { STATUS_CONFIG } from './StatusBadge'
+import { rentalFolio } from '@/lib/rentalLabels'
 
 const PAGE_SIZE = 20
 const ALL_STATUSES = Object.entries(STATUS_CONFIG).map(([value, { label }]) => ({ value, label }))
@@ -34,11 +36,12 @@ export default async function ReservasPage({ searchParams }: Props) {
   let query = supabase
     .from('reservations')
     .select(`
-      id, start_date, end_date, status, created_at,
+      id, number, origin, start_date, end_date, status, created_at,
       clients ( full_name, id_number ),
       vehicles ( plates, brand, model )
     `, { count: 'exact' })
     .eq('tenant_id', profile.tenant_id)
+    .eq('origin', 'reservation')
     .order('created_at', { ascending: false })
     .range(from, to)
 
@@ -122,6 +125,7 @@ export default async function ReservasPage({ searchParams }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
+                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">No.</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Cliente</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Vehículo</th>
                   <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Fechas</th>
@@ -138,6 +142,7 @@ export default async function ReservasPage({ searchParams }: Props) {
                   )
                   return (
                     <tr key={r.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs text-gray-700 whitespace-nowrap">{rentalFolio(r.origin, r.number)}</td>
                       <td className="px-4 py-3">
                         <p className="font-medium text-gray-900">{client?.full_name ?? '—'}</p>
                         <p className="text-xs text-gray-400">{client?.id_number}</p>

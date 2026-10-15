@@ -121,9 +121,82 @@ enum AuditAction {
   @@map("audit_action")
 }
 
+// Origen de la renta: reserva hecha con anticipación o contrato de mostrador (walk-in)
+enum ReservationOrigin {
+  reservation
+  walk_in
+
+  @@map("reservation_origin")
+}
+
+// Inventario de equipo
+enum EquipmentType {
+  gps
+  hotspot
+  baby_seat
+  other
+
+  @@map("equipment_type")
+}
+
+enum EquipmentStatus {
+  available     // En sucursal, se puede entregar
+  assigned      // Entregado a un cliente
+  maintenance   // Regresó dañado / en revisión
+  lost          // No fue devuelto
+  retired       // Dado de baja
+
+  @@map("equipment_status")
+}
+
+enum EquipmentCondition {
+  ok
+  damaged
+  missing
+
+  @@map("equipment_condition")
+}
+
+// Tipo de cambio registrado en el historial de una renta
+enum ReservationChangeType {
+  return_date      // Extensión o adelanto de la fecha de regreso
+  vehicle_change   // Cambio de vehículo
+
+  @@map("reservation_change_type")
+}
+
+// Tipos de evento de agenda del calendario
+enum CalendarEventType {
+  scheduled_return   // Retorno programado (fuera de la fecha pactada)
+  equipment_return   // Retorno / recolección de equipo (GPS, hotspot, silla de bebé)
+  vehicle_change     // Cambio de vehículo
+  team_note          // Nota para el equipo
+  other
+
+  @@map("calendar_event_type")
+}
+
+// Cambio de vehículo durante la renta
+enum VehicleSwapReason {
+  customer_request   // A solicitud del cliente: el precio cambia desde el día del cambio
+  vehicle_issue      // Falla del vehículo: sin alterar precio
+  unavailable        // El vehículo reservado no estaba disponible: sin alterar precio
+
+  @@map("vehicle_swap_reason")
+}
+
+enum VehicleSwapStatus {
+  in_progress
+  completed
+  cancelled
+
+  @@map("vehicle_swap_status")
+}
+
 enum PaymentMethod {
   cash
   card
+  mixed
 
   @@map("payment_method")
 }
@@ -162,6 +235,12 @@ model Tenant {
   contracts                Contract[]
   inspections              Inspection[]
   auditLogs                AuditLog[]
+  calendarEvents           CalendarEvent[]
+  reservationChanges       ReservationChange[]
+  equipmentItems           EquipmentItem[]
+  rentalEquipment          RentalEquipment[]
+  rentalCharges            RentalCharge[]
+  vehicleSwaps             ReservationVehicleSwap[]
 
   @@map("tenants")
 }
@@ -205,6 +284,14 @@ model User {
   removedBlacklist      ClientBlacklist[]       @relation("BlacklistRemovedBy")
   createdClients        Client[]
   auditLogs             AuditLog[]
+  createdEvents         CalendarEvent[]         @relation("CalendarEventCreatedBy")
+  doneEvents            CalendarEvent[]         @relation("CalendarEventDoneBy")
+  reservationChanges    ReservationChange[]
+  createdEquipment      EquipmentItem[]
+  assignedEquipment     RentalEquipment[]       @relation("RentalEquipmentAssignedBy")
+  returnedEquipment     RentalEquipment[]       @relation("RentalEquipmentReturnedBy")
+  createdCharges        RentalCharge[]
+  createdSwaps          ReservationVehicleSwap[]
 
   @@index([tenantId])
   @@index([email])
@@ -238,6 +325,9 @@ model Vehicle {
   maintenanceAlerts VehicleMaintenanceAlert[]
   reservations      Reservation[]
   vehicleBlocks     VehicleBlock[]
+  inspections       Inspection[]
+  swapsFrom         ReservationVehicleSwap[] @relation("SwapFromVehicle")
+  swapsTo           ReservationVehicleSwap[] @relation("SwapToVehicle")
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -281,6 +371,8 @@ model Client {
   email         String?
   licenseNumber String?   @map("license_number")
   licenseExpiry DateTime? @map("license_expiry") @db.Date
+  passportNumber String?  @map("passport_number")
+  passportExpiry DateTime? @map("passport_expiry") @db.Date
   // Dirección completa (para el contrato)
   address       String?
   city          String?
@@ -333,7 +425,10 @@ model Reservation {
   startDate   DateTime          @map("start_date") @db.Timestamptz(6)
   endDate     DateTime          @map("end_date") @db.Timestamptz(6)
   status      ReservationStatus @default(pending)
+  origin      ReservationOrigin @default(reservation)   // reservation | walk_in (contrato de mostrador)
+  number      Int                                       // Consecutivo por tenant y origen (lo asigna un trigger): R-0001 / C-0001
   notes       String?
+  internalNotes String?       @map("internal_notes")      // Notas internas (no salen en el contrato)
 
   // ── Contrato / pricing ──────────────────────────────────────────────────
   dailyRate       Decimal?       @map("daily_rate")       @db.Decimal(10, 2) // USD por día
@@ -346,6 +441,8 @@ model Reservation {
   station         String?                                  // Estación / oficina de entrega
   folio           String?                                  // Folio interno del depósito
   approvalNumber  String?        @map("approval_number")  // Número de aprobación
+  cashPayment     Decimal?       @map("cash_payment")     @db.Decimal(10, 2) // Abono en efectivo
+  cardPayment     Decimal?       @map("card_payment")     @db.Decimal(10, 2) // Abono en tarjeta
 
   // ── Seguros (cada uno: precio + decisión del cliente) ───────────────────
   // CDW = Collision Damage Waiver
@@ -394,11 +491,17 @@ model Reservation {
   extras      ReservationExtra[]
   contract    Contract?
   inspections Inspection[]
+  calendarEvents CalendarEvent[]
+  changes        ReservationChange[]
+  equipment      RentalEquipment[]
+  charges        RentalCharge[]
+  vehicleSwaps   ReservationVehicleSwap[]
 
   // Índice para consultas de disponibilidad por fecha
   @@index([tenantId, vehicleId, startDate, endDate])
   @@index([tenantId, status])
   @@index([tenantId, clientId])
+  @@unique([tenantId, origin, number])
   @@map("reservations")
 }
 
@@ -472,17 +575,23 @@ model Inspection {
   notes         String?
   inspectorId   String         @map("inspector_id") @db.Uuid
   completedAt   DateTime       @default(now()) @map("completed_at") @db.Timestamptz(6)
+  vehicleId     String?        @map("vehicle_id") @db.Uuid   // Vehículo inspeccionado
+  swapId        String?        @map("swap_id") @db.Uuid      // Si pertenece a un cambio de vehículo
 
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  reservation Reservation @relation(fields: [reservationId], references: [id])
-  inspector   User        @relation(fields: [inspectorId], references: [id])
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation             @relation(fields: [reservationId], references: [id])
+  inspector   User                    @relation(fields: [inspectorId], references: [id])
+  vehicle     Vehicle?                @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  swap        ReservationVehicleSwap? @relation(fields: [swapId], references: [id], onDelete: SetNull)
 
   damagePoints InspectionDamagePoint[]
   photos       InspectionPhoto[]
 
-  // Una reserva tiene máximo un checkout y un checkin
-  @@unique([reservationId, type])
+  // Índices parciales en SQL (Prisma no los soporta):
+  //   - un checkout y un checkin "principales" por renta (swap_id IS NULL)
+  //   - una recepción y una entrega por cada cambio de vehículo (swap_id IS NOT NULL)
   @@index([tenantId])
+  @@index([swapId])
   @@map("inspections")
 }
 
@@ -507,6 +616,7 @@ model InspectionPhoto {
   inspectionId String   @map("inspection_id") @db.Uuid
   storagePath  String   @map("storage_path")       // Ruta en Supabase Storage
   caption      String?
+  angle        String?                             // front | rear | left | right | interior | other
   uploadedAt   DateTime @default(now()) @map("uploaded_at") @db.Timestamptz(6)
 
   inspection Inspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
@@ -538,4 +648,164 @@ model AuditLog {
   @@index([tenantId, entityType, entityId])
   @@index([tenantId, timestamp])
   @@map("audit_logs")
+}
+
+// Evento de agenda en el calendario (fase 1). Opcionalmente ligado a una renta.
+model CalendarEvent {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String            @map("tenant_id") @db.Uuid
+  type          CalendarEventType @default(other)
+  title         String
+  notes         String?
+  eventDate     DateTime          @map("event_date") @db.Date
+  eventTime     DateTime?         @map("event_time") @db.Time(6)
+  reservationId String?           @map("reservation_id") @db.Uuid
+  rentalEquipmentId String?       @map("rental_equipment_id") @db.Uuid   // Recordatorio de recolección de un equipo
+  done          Boolean           @default(false)
+  doneAt        DateTime?         @map("done_at") @db.Timestamptz(6)
+  doneBy        String?           @map("done_by") @db.Uuid
+  createdBy     String            @map("created_by") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  rentalEquipment RentalEquipment? @relation(fields: [rentalEquipmentId], references: [id], onDelete: SetNull)
+  creator     User         @relation("CalendarEventCreatedBy", fields: [createdBy], references: [id])
+  doneByUser  User?        @relation("CalendarEventDoneBy", fields: [doneBy], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, eventDate])
+  @@index([reservationId])
+  @@map("calendar_events")
+}
+
+// Historial de cambios de una renta (documentación para sustentar cargos)
+model ReservationChange {
+  id             String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String                @map("tenant_id") @db.Uuid
+  reservationId  String                @map("reservation_id") @db.Uuid
+  type           ReservationChangeType
+  oldEndDate     DateTime?             @map("old_end_date") @db.Timestamptz(6)
+  newEndDate     DateTime?             @map("new_end_date") @db.Timestamptz(6)
+  oldTotal       Decimal?              @map("old_total") @db.Decimal(10, 2)
+  suggestedTotal Decimal?              @map("suggested_total") @db.Decimal(10, 2)
+  newTotal       Decimal?              @map("new_total") @db.Decimal(10, 2)
+  reason         String?
+  details        Json?
+  createdBy      String                @map("created_by") @db.Uuid
+  createdAt      DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  creator     User        @relation(fields: [createdBy], references: [id])
+
+  @@index([reservationId, createdAt])
+  @@index([tenantId])
+  @@map("reservation_changes")
+}
+
+// Equipo del inventario (código fijo, ej. GPS-001)
+model EquipmentItem {
+  id        String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String          @map("tenant_id") @db.Uuid
+  code      String
+  type      EquipmentType
+  name      String?
+  status    EquipmentStatus @default(available)
+  notes     String?
+  createdBy String          @map("created_by") @db.Uuid
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator     User              @relation(fields: [createdBy], references: [id])
+  assignments RentalEquipment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+  @@map("equipment_items")
+}
+
+// Equipo entregado en una renta y su devolución
+// (índice parcial en SQL: un equipo solo puede estar sin devolver en una renta a la vez)
+model RentalEquipment {
+  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String              @map("tenant_id") @db.Uuid
+  reservationId   String              @map("reservation_id") @db.Uuid
+  equipmentId     String              @map("equipment_id") @db.Uuid
+  assignedBy      String              @map("assigned_by") @db.Uuid
+  assignedAt      DateTime            @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  returnedBy      String?             @map("returned_by") @db.Uuid
+  returnedAt      DateTime?           @map("returned_at") @db.Timestamptz(6)
+  returnCondition EquipmentCondition? @map("return_condition")
+  returnNotes     String?             @map("return_notes")
+
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation     @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  equipment   EquipmentItem   @relation(fields: [equipmentId], references: [id])
+  assigner    User            @relation("RentalEquipmentAssignedBy", fields: [assignedBy], references: [id])
+  returner    User?           @relation("RentalEquipmentReturnedBy", fields: [returnedBy], references: [id], onDelete: SetNull)
+  charges     RentalCharge[]
+  events      CalendarEvent[]
+
+  @@index([reservationId])
+  @@index([equipmentId])
+  @@map("rental_equipment")
+}
+
+// Cargo adicional de una renta (documentado con motivo y fotos)
+model RentalCharge {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  reservationId     String   @map("reservation_id") @db.Uuid
+  rentalEquipmentId String?  @map("rental_equipment_id") @db.Uuid
+  concept           String
+  amount            Decimal  @db.Decimal(10, 2)
+  reason            String
+  photoPaths        String[] @default([]) @map("photo_paths")
+  createdBy         String   @map("created_by") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation     Reservation      @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  rentalEquipment RentalEquipment? @relation(fields: [rentalEquipmentId], references: [id], onDelete: SetNull)
+  creator         User             @relation(fields: [createdBy], references: [id])
+
+  @@index([reservationId])
+  @@map("rental_charges")
+}
+
+// Cambio de vehículo durante una renta (recepción del actual + entrega del nuevo)
+model ReservationVehicleSwap {
+  id             String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String            @map("tenant_id") @db.Uuid
+  reservationId  String            @map("reservation_id") @db.Uuid
+  fromVehicleId  String            @map("from_vehicle_id") @db.Uuid
+  toVehicleId    String            @map("to_vehicle_id") @db.Uuid
+  reason         VehicleSwapReason
+  keepPrice      Boolean           @default(false) @map("keep_price")
+  status         VehicleSwapStatus @default(in_progress)
+  swapAt         DateTime          @default(now()) @map("swap_at") @db.Timestamptz(6)
+  daysUsed       Int?              @map("days_used")
+  daysRemaining  Int?              @map("days_remaining")
+  fromDailyRate  Decimal?          @map("from_daily_rate") @db.Decimal(10, 2)
+  toDailyRate    Decimal?          @map("to_daily_rate") @db.Decimal(10, 2)
+  oldTotal       Decimal?          @map("old_total") @db.Decimal(10, 2)
+  suggestedTotal Decimal?          @map("suggested_total") @db.Decimal(10, 2)
+  newTotal       Decimal?          @map("new_total") @db.Decimal(10, 2)
+  notes          String?
+  createdBy      String            @map("created_by") @db.Uuid
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt    DateTime?         @map("completed_at") @db.Timestamptz(6)
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservation Reservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  fromVehicle Vehicle      @relation("SwapFromVehicle", fields: [fromVehicleId], references: [id])
+  toVehicle   Vehicle      @relation("SwapToVehicle", fields: [toVehicleId], references: [id])
+  creator     User         @relation(fields: [createdBy], references: [id])
+  inspections Inspection[]
+
+  // Índice parcial en SQL: solo un cambio en proceso por renta
+  @@index([reservationId])
+  @@map("reservation_vehicle_swaps")
 }

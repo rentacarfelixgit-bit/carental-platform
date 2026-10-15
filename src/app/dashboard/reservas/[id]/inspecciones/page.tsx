@@ -2,6 +2,9 @@
 // Resumen de inspecciones (checkout / checkin) de una reserva — Server Component
 
 import Link from 'next/link'
+import { rentalFolio, rentalKind } from '@/lib/rentalLabels'
+import { PHOTO_ANGLES, angleLabel } from '@/lib/photoAngles'
+import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 
@@ -41,12 +44,13 @@ interface DamagePoint {
 }
 
 interface InspectionPhoto {
-  id: string; storage_path: string; signedUrl: string
+  id: string; storage_path: string; signedUrl: string; angle: string | null
 }
 
 interface Inspection {
   id: string; type: string; odometer: number; fuel_level: string
   notes: string | null; completed_at: string
+  swap_id: string | null; vehicle_id: string | null
   inspection_damage_points: DamagePoint[]
   inspection_photos: InspectionPhoto[]
 }
@@ -67,7 +71,7 @@ export default async function InspeccionesResumenPage({ params }: Props) {
 
   const { data: reservation } = await supabase
     .from('reservations')
-    .select('id, status, vehicles ( brand, model, plates )')
+    .select('id, number, origin, status, vehicles ( brand, model, plates )')
     .eq('id', id)
     .eq('tenant_id', profile.tenant_id)
     .single()
@@ -77,9 +81,9 @@ export default async function InspeccionesResumenPage({ params }: Props) {
   const { data: inspections } = await supabase
     .from('inspections')
     .select(`
-      id, type, odometer, fuel_level, notes, completed_at,
+      id, type, odometer, fuel_level, notes, completed_at, swap_id, vehicle_id,
       inspection_damage_points ( id, zone, severity, description, x_pct, y_pct ),
-      inspection_photos ( id, storage_path )
+      inspection_photos ( id, storage_path, angle )
     `)
     .eq('reservation_id', id)
     .order('completed_at')
@@ -104,21 +108,57 @@ export default async function InspeccionesResumenPage({ params }: Props) {
   const enriched = rawInspections.map(i => ({
     ...i,
     inspection_photos: (i.inspection_photos ?? []).map(
-      (p: { id: string; storage_path: string }) => ({
+      (p: { id: string; storage_path: string; angle: string | null }) => ({
         ...p,
         signedUrl: signedUrlMap[p.storage_path] ?? '',
       })
     ),
   }))
 
-  const checkout = enriched.find(i => i.type === 'checkout') as Inspection | undefined
-  const checkin  = enriched.find(i => i.type === 'checkin')  as Inspection | undefined
+  // ── Tramos de la renta: salida principal → (cambios de vehículo) → regreso principal ──
+  const all = enriched as Inspection[]
+  const checkout = all.find(i => i.type === 'checkout' && !i.swap_id)
+  const checkin  = all.find(i => i.type === 'checkin'  && !i.swap_id)
+
+  type V = { brand: string; model: string; plates: string } | null
+  const one = <T,>(v: unknown) => (Array.isArray(v) ? v[0] : v) as T
+  const vLabel = (v: V) => v ? `${v.brand} ${v.model} · ${v.plates}` : ''
+
+  const { data: swapRows } = await supabase
+    .from('reservation_vehicle_swaps')
+    .select(`id, status, reason, swap_at,
+      from_vehicle:vehicles!reservation_vehicle_swaps_from_vehicle_id_fkey ( brand, model, plates ),
+      to_vehicle:vehicles!reservation_vehicle_swaps_to_vehicle_id_fkey ( brand, model, plates )`)
+    .eq('reservation_id', id)
+    .eq('tenant_id', profile.tenant_id)
+    .neq('status', 'cancelled')
+    .order('created_at')
+  const swaps = (swapRows ?? []).map(sw => ({
+    id: sw.id, status: sw.status as string, reason: sw.reason as SwapReason, swapAt: sw.swap_at as string,
+    from: vLabel(one<V>(sw.from_vehicle)), to: vLabel(one<V>(sw.to_vehicle)),
+    checkin:  all.find(i => i.swap_id === sw.id && i.type === 'checkin'),
+    checkout: all.find(i => i.swap_id === sw.id && i.type === 'checkout'),
+  }))
+  const openSwap = swaps.some(sw => sw.status === 'in_progress')
   const canInspect = reservation.status !== 'cancelled'
 
   const v = reservation.vehicles as unknown as { brand: string; model: string; plates: string } | null
 
-  // Zonas con daño en el checkout (para la comparativa)
-  const checkoutZones = new Set((checkout?.inspection_damage_points ?? []).map(d => d.zone))
+  // Vehículo de la salida principal = el "from" del primer cambio (o el actual si no hubo cambios)
+  const firstVehicle = swaps[0]?.from ?? vLabel(v)
+  const lastVehicle  = vLabel(v)
+
+  // Pares salida → regreso de un mismo vehículo, para comparar
+  const legs: { label: string; out?: Inspection; back?: Inspection }[] = []
+  if (swaps.length === 0) {
+    legs.push({ label: lastVehicle, out: checkout, back: checkin })
+  } else {
+    legs.push({ label: swaps[0].from, out: checkout, back: swaps[0].checkin })
+    swaps.forEach((sw, k) => legs.push({
+      label: sw.to, out: sw.checkout, back: k + 1 < swaps.length ? swaps[k + 1].checkin : checkin,
+    }))
+  }
+  const zonesOf = (insp?: Inspection) => insp ? new Set(insp.inspection_damage_points.map(d => d.zone)) : null
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -127,7 +167,7 @@ export default async function InspeccionesResumenPage({ params }: Props) {
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
           </svg>
-          Reserva
+          {rentalKind(reservation.origin)} {rentalFolio(reservation.origin, reservation.number)}
         </Link>
         <h1 className="text-xl font-semibold text-gray-900">Inspecciones</h1>
         {v && <p className="text-sm text-gray-500 mt-0.5">{v.brand} {v.model} · {v.plates}</p>}
@@ -136,6 +176,7 @@ export default async function InspeccionesResumenPage({ params }: Props) {
       <div className="grid grid-cols-1 gap-6">
         <InspectionCard
           title="Entrega del vehículo (checkout)"
+          subtitle={swaps.length ? firstVehicle : undefined}
           inspection={checkout ?? null}
           type="checkout"
           reservationId={id}
@@ -144,21 +185,57 @@ export default async function InspeccionesResumenPage({ params }: Props) {
           checkoutZones={null}
         />
 
+        {swaps.map((sw, k) => (
+          <div key={sw.id} className="space-y-3">
+            <div className="flex items-center gap-2 text-xs text-indigo-700">
+              <span className="h-px flex-1 bg-indigo-100" />
+              <span className="font-medium">
+                Cambio de vehículo · {new Date(sw.swapAt).toLocaleDateString('es-MX')} · {SWAP_REASONS[sw.reason]?.label}
+                {sw.status === 'in_progress' && ' · en proceso'}
+              </span>
+              <span className="h-px flex-1 bg-indigo-100" />
+            </div>
+            <InspectionCard
+              title="Recepción del vehículo anterior"
+              subtitle={sw.from}
+              inspection={sw.checkin ?? null}
+              type="checkin"
+              reservationId={id}
+              canCreate={false}
+              createHref={sw.status === 'in_progress' ? `/dashboard/reservas/${id}/cambio-vehiculo` : undefined}
+              accentColor="green"
+              checkoutZones={zonesOf(legs[k]?.out)}
+            />
+            <InspectionCard
+              title="Entrega del vehículo nuevo"
+              subtitle={sw.to}
+              inspection={sw.checkout ?? null}
+              type="checkout"
+              reservationId={id}
+              canCreate={false}
+              createHref={sw.status === 'in_progress' ? `/dashboard/reservas/${id}/cambio-vehiculo` : undefined}
+              accentColor="blue"
+              checkoutZones={null}
+            />
+          </div>
+        ))}
+
         <InspectionCard
           title="Recepción del vehículo (check-in)"
+          subtitle={swaps.length ? lastVehicle : undefined}
           inspection={checkin ?? null}
           type="checkin"
           reservationId={id}
-          canCreate={canInspect && !checkin}
+          canCreate={canInspect && !checkin && !openSwap}
           accentColor="green"
-          checkoutZones={checkout ? checkoutZones : null}
+          checkoutZones={zonesOf(legs[legs.length - 1]?.out)}
         />
       </div>
 
-      {/* ── Comparativa ─────────────────────────────────────────────────── */}
-      {checkout && checkin && (
-        <DamageComparison checkout={checkout} checkin={checkin} />
-      )}
+      {/* ── Comparativa por vehículo ────────────────────────────────────── */}
+      {legs.filter(l => l.out && l.back).map((l, k) => (
+        <DamageComparison key={k} checkout={l.out!} checkin={l.back!} title={swaps.length ? l.label : undefined} />
+      ))}
     </div>
   )
 }
@@ -166,9 +243,12 @@ export default async function InspeccionesResumenPage({ params }: Props) {
 // ── Tarjeta de inspección ─────────────────────────────────────────────────────
 
 function InspectionCard({
-  title, inspection, type, reservationId, canCreate, accentColor, checkoutZones,
+  title, subtitle, inspection, type, reservationId, canCreate, createHref, accentColor, checkoutZones,
 }: {
   title: string
+  subtitle?: string
+  /** Enlace alternativo cuando la inspección se registra desde otro flujo (cambio de vehículo) */
+  createHref?: string
   inspection: Inspection | null
   type: string
   reservationId: string
@@ -188,8 +268,13 @@ function InspectionCard({
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-medium text-gray-700">{title}</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Sin registrar</p>
+            <p className="text-xs text-gray-400 mt-0.5">{subtitle ? `${subtitle} · ` : ''}Sin registrar</p>
           </div>
+          {!canCreate && createHref && (
+            <Link href={createHref} className={`text-sm px-4 py-2 rounded-lg text-white transition-colors ${c.btn}`}>
+              Ir al cambio
+            </Link>
+          )}
           {canCreate && (
             <Link
               href={`/dashboard/reservas/${reservationId}/inspecciones/${type}`}
@@ -211,6 +296,7 @@ function InspectionCard({
       <div className={`${c.bg} px-5 py-3 flex items-center justify-between`}>
         <div>
           <h2 className={`text-sm font-medium ${c.text}`}>{title}</h2>
+          {subtitle && <p className="text-xs text-gray-600">{subtitle}</p>}
           <p className="text-xs text-gray-500 mt-0.5">
             {new Date(inspection.completed_at).toLocaleString('es-MX')}
           </p>
@@ -294,14 +380,19 @@ function PhotoGrid({ photos }: { photos: InspectionPhoto[] }) {
             href={photo.signedUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="block aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity"
+            className="relative block aspect-square rounded-lg overflow-hidden bg-gray-100 hover:opacity-90 transition-opacity"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={photo.signedUrl}
-              alt="Foto de inspección"
+              alt={angleLabel(photo.angle) ?? 'Foto de inspección'}
               className="w-full h-full object-cover"
             />
+            {angleLabel(photo.angle) && (
+              <span className="absolute bottom-1 left-1 px-1 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded">
+                {angleLabel(photo.angle)}
+              </span>
+            )}
           </a>
         ))}
       </div>
@@ -311,7 +402,7 @@ function PhotoGrid({ photos }: { photos: InspectionPhoto[] }) {
 
 // ── Sección de comparativa ────────────────────────────────────────────────────
 
-function DamageComparison({ checkout, checkin }: { checkout: Inspection; checkin: Inspection }) {
+function DamageComparison({ checkout, checkin, title }: { checkout: Inspection; checkin: Inspection; title?: string }) {
   const checkoutZones = new Set(checkout.inspection_damage_points.map(d => d.zone))
   const newDamages    = checkin.inspection_damage_points.filter(d => !checkoutZones.has(d.zone))
   const kmDiff = checkin.odometer - checkout.odometer
@@ -319,7 +410,7 @@ function DamageComparison({ checkout, checkin }: { checkout: Inspection; checkin
   return (
     <div className="mt-6 bg-white border border-gray-200 rounded-xl overflow-hidden">
       <div className="bg-gray-50 px-5 py-3 border-b border-gray-100">
-        <h2 className="text-sm font-medium text-gray-700">Comparativa checkout → check-in</h2>
+        <h2 className="text-sm font-medium text-gray-700">Comparativa checkout → check-in{title ? ` · ${title}` : ''}</h2>
       </div>
 
       <div className="p-5 space-y-5">
@@ -359,6 +450,9 @@ function DamageComparison({ checkout, checkin }: { checkout: Inspection; checkin
           </div>
         </div>
 
+        {/* Fotos por ángulo: salida vs regreso */}
+        <AngleComparison checkout={checkout.inspection_photos} checkin={checkin.inspection_photos} />
+
         {/* Daños nuevos */}
         <div>
           <p className="text-xs text-gray-400 mb-2">
@@ -386,6 +480,52 @@ function DamageComparison({ checkout, checkin }: { checkout: Inspection; checkin
             <p className="text-xs text-green-600 font-medium">Sin daños nuevos — el vehículo regresó en el mismo estado.</p>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Comparativa de fotos por ángulo ───────────────────────────────────────────
+
+function AngleComparison({ checkout, checkin }: { checkout: InspectionPhoto[]; checkin: InspectionPhoto[] }) {
+  const groups = [...PHOTO_ANGLES, null].map(angle => ({
+    angle,
+    label: angle ? angleLabel(angle) : 'Sin ángulo',
+    out:  checkout.filter(p => (p.angle ?? null) === angle),
+    back: checkin.filter(p => (p.angle ?? null) === angle),
+  })).filter(g => g.out.length > 0 || g.back.length > 0)
+
+  if (groups.length === 0) return null
+
+  const Thumbs = ({ photos, empty }: { photos: InspectionPhoto[]; empty: string }) =>
+    photos.length > 0 ? (
+      <div className="flex gap-1.5 flex-wrap">
+        {photos.map(p => (
+          <a key={p.id} href={p.signedUrl} target="_blank" rel="noopener noreferrer"
+            className="block w-24 aspect-[4/3] rounded-md overflow-hidden bg-gray-100 hover:opacity-90">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={p.signedUrl} alt="" className="w-full h-full object-cover" />
+          </a>
+        ))}
+      </div>
+    ) : (
+      <p className="text-xs text-gray-400 italic py-2">{empty}</p>
+    )
+
+  return (
+    <div>
+      <p className="text-xs text-gray-400 mb-2">Fotos por ángulo</p>
+      <div className="border border-gray-100 rounded-lg divide-y divide-gray-100">
+        <div className="grid grid-cols-[6.5rem_1fr_1fr] gap-3 px-3 py-2 bg-gray-50 text-[11px] font-medium text-gray-500">
+          <span>Ángulo</span><span>Salida</span><span>Regreso</span>
+        </div>
+        {groups.map(g => (
+          <div key={g.angle ?? 'none'} className="grid grid-cols-[6.5rem_1fr_1fr] gap-3 px-3 py-2 items-start">
+            <span className="text-xs font-medium text-gray-700 pt-1">{g.label}</span>
+            <Thumbs photos={g.out}  empty="Sin foto" />
+            <Thumbs photos={g.back} empty="Sin foto" />
+          </div>
+        ))}
       </div>
     </div>
   )

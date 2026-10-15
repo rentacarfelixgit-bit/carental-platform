@@ -1,99 +1,196 @@
 'use client'
 
 // src/app/dashboard/reservas/nueva/NuevaReservaForm.tsx
-// Form reactivo: al cambiar fechas filtra vehículos disponibles,
-// al cambiar cliente avisa si está en lista negra.
 
-import { useState, useTransition, useActionState, useEffect, useRef } from 'react'
+import { useState, useTransition, useActionState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
-import { createReservation, getAvailableVehicles } from '../actions'
+import { createReservation, getAvailableVehicles, searchClients } from '../actions'
 import BlacklistWarning from '@/components/dashboard/BlacklistWarning'
-import NuevoClienteModal from './NuevoClienteModal'
 import Link from 'next/link'
+import {
+  INSURANCE_ITEMS, EXTRA_ITEMS, TAX_ITEMS, ALL_PRICE_ITEMS,
+  type PriceItem, type ReservationPrices,
+} from '@/lib/reservationPrices'
 
-interface Client { id: string; full_name: string; id_number: string }
-interface Vehicle { id: string; plates: string; brand: string; model: string; year: number; color: string; daily_rate?: number | null }
+interface Client {
+  id: string; full_name: string; id_number: string
+  phone: string | null; email: string | null
+  license_number: string | null; license_expiry: string | null
+  passport_number: string | null; passport_expiry: string | null
+  address: string | null; city: string | null; state: string | null; zip_code: string | null
+}
+interface Vehicle {
+  id: string; plates: string; brand: string; model: string; year: number; color: string; daily_rate?: number | null
+}
 
 interface Props {
   clients: Client[]
   initialStartDate?: string
   initialEndDate?: string
   initialVehicleId?: string
+  /** Precios por defecto definidos por el admin en Configuración */
+  defaultPrices: ReservationPrices
+  /**
+   * 'reservation' (default): reserva normal, nace en "pendiente".
+   * 'contract': contrato de mostrador (walk-in), nace como "contrato abierto" (confirmed).
+   * El formulario y el flujo son los mismos; solo cambian textos y el origen guardado.
+   */
+  mode?: 'reservation' | 'contract'
 }
 
-const EXTRAS = [
-  { value: 'gps',          label: 'GPS' },
-  { value: 'baby_seat',    label: 'Silla para bebé' },
-  { value: 'extra_driver', label: 'Conductor adicional' },
-  { value: 'custom',       label: 'Extra personalizado' },
+// ── Seguros, extras e impuestos que van en el sidebar (catálogo en @/lib/reservationPrices) ──
+const INSURANCES   = INSURANCE_ITEMS
+const EXTRAS_FIXED = EXTRA_ITEMS
+const TAXES_FIXED  = TAX_ITEMS
+
+/** Input de precio editable que aparece al marcar un concepto */
+function PriceField({ item, value, onChange }: {
+  item: PriceItem; value: string; onChange: (v: string) => void
+}) {
+  return (
+    <div className="ml-5 mb-1 flex items-center gap-1">
+      {item.kind !== 'pct' && <span className="text-[10px] text-gray-400">RD$</span>}
+      <input
+        type="text" inputMode="decimal" placeholder="0.00" value={value}
+        onChange={e => {
+          const v = e.target.value
+          if (v === '' || /^\d*\.?\d{0,2}$/.test(v)) onChange(v)
+        }}
+        className="w-20 px-2 py-0.5 text-xs border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+      />
+      <span className="text-[10px] text-gray-400">
+        {item.kind === 'per_day' ? '/día' : item.kind === 'pct' ? '%' : 'por reserva'}
+      </span>
+    </div>
+  )
+}
+
+const LADAS = [
+  { code: '+1',  flag: '🇩🇴' }, { code: '+1',  flag: '🇺🇸' },
+  { code: '+52', flag: '🇲🇽' }, { code: '+58', flag: '🇻🇪' },
+  { code: '+57', flag: '🇨🇴' }, { code: '+34', flag: '🇪🇸' },
 ]
 
-export default function NuevaReservaForm({ clients: initialClients, initialStartDate = '', initialEndDate = '', initialVehicleId = '' }: Props) {
+// ── Sanitizado de inputs (se aplica mientras el usuario escribe) ─────────────
+const clean = {
+  /** Solo dígitos (celular, zip) */
+  digits:   (v: string, max: number) => v.replace(/\D/g, '').slice(0, max),
+  /** Letras (con acentos/ñ), espacios, apóstrofe, punto y guion — nombres, ciudad, estado */
+  name:     (v: string, max: number) => v.replace(/[^\p{L}\s'.-]/gu, '').replace(/\s{2,}/g, ' ').slice(0, max),
+  /** Letras, números y guion, en mayúsculas — licencia y pasaporte */
+  doc:      (v: string, max: number) => v.replace(/[^A-Za-z0-9-]/g, '').toUpperCase().slice(0, max),
+  /** Sin espacios — email */
+  email:    (v: string, max: number) => v.replace(/\s/g, '').slice(0, max),
+}
+
+/** Evita que en inputs type="number" se escriban e, E, +, - (el navegador los permite por notación científica). */
+function blockNonNumericKeys(e: React.KeyboardEvent<HTMLInputElement>) {
+  if (['e', 'E', '+', '-'].includes(e.key)) e.preventDefault()
+}
+
+const PHONE_MIN = 7
+const PHONE_MAX = 15
+
+export default function NuevaReservaForm({
+  clients: initialClients,
+  initialStartDate = '',
+  initialEndDate   = '',
+  initialVehicleId = '',
+  defaultPrices,
+  mode = 'reservation',
+}: Props) {
+  const isContract = mode === 'contract'
+  const sectionHref  = isContract ? '/dashboard/contratos' : '/dashboard/reservas'
+  const sectionLabel = isContract ? 'Contratos' : 'Reservas'
   const [state, action, pending] = useActionState(createReservation, {})
 
-  // Lista de clientes — se expande al crear uno nuevo desde el modal
-  const [clientsList, setClientsList] = useState<Client[]>(initialClients)
-  const [showClientModal, setShowClientModal] = useState(false)
-
-  const [selectedClientId, setSelectedClientId] = useState('')
-  const [blacklistStatus, setBlacklistStatus]   = useState<{ blacklisted: boolean; reason?: string; addedAt?: string } | null>(null)
+  // ── Clientes ──────────────────────────────────────────────────────────────
+  const [clientSearch, setClientSearch]       = useState('')
+  const [showDropdown, setShowDropdown]       = useState(false)
+  const [selectedClient, setSelectedClient]   = useState<Client | null>(null)
+  const [searchResults, setSearchResults]     = useState<Client[]>(initialClients.slice(0, 8))
+  const [searching, setSearching]             = useTransition()
+  const [blacklistStatus, setBlacklistStatus] = useState<{ blacklisted: boolean; reason?: string; addedAt?: string } | null>(null)
   const [checkingBlacklist, setCheckingBlacklist] = useTransition()
+  const searchRef   = useRef<HTMLInputElement>(null)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Cuando se crea un cliente desde el modal: añadirlo a la lista y seleccionarlo
-  function handleClientCreated(newClient: Client) {
-    setClientsList(prev => [newClient, ...prev])
-    handleClientChange(newClient.id)
-    setShowClientModal(false)
+  // Campos del cliente (pre-llenados y editables; los cambios se guardan en el cliente al crear la reserva)
+  const [cName,     setCName]     = useState('')
+  const [cPhCode,   setCPhCode]   = useState('+1')
+  const [cPhone,    setCPhone]    = useState('')
+  const [cEmail,    setCEmail]    = useState('')
+  const [cLic,      setCLic]      = useState('')
+  const [cLicExp,   setCLicExp]   = useState('')
+  const [cPass,     setCPass]     = useState('')
+  const [cPassExp,  setCPassExp]  = useState('')
+  const [cAddr,     setCAddr]     = useState('')
+  const [cCity,     setCCity]     = useState('')
+  const [cState,    setCState]    = useState('')
+  const [cZip,      setCZip]      = useState('')
+
+  function fillClientFields(c: Client | null) {
+    if (!c) {
+      setCName(''); setCPhone(''); setCEmail('')
+      setCLic(''); setCLicExp(''); setCPass(''); setCPassExp('')
+      setCAddr(''); setCCity(''); setCState(''); setCZip('')
+      return
+    }
+    // Parse lada from phone
+    let code = '+1', num = c.phone ?? ''
+    for (const l of LADAS) {
+      if (num.startsWith(l.code)) { code = l.code; num = num.slice(l.code.length).trim(); break }
+    }
+    setCName(c.full_name)
+    setCPhCode(code); setCPhone(clean.digits(num, PHONE_MAX))
+    setCEmail(c.email ?? '')
+    setCLic(c.license_number ?? '')
+    setCLicExp(c.license_expiry?.split('T')[0] ?? '')
+    setCPass(c.passport_number ?? '')
+    setCPassExp(c.passport_expiry?.split('T')[0] ?? '')
+    setCAddr(c.address ?? '')
+    setCCity(c.city ?? '')
+    setCState(c.state ?? '')
+    setCZip(c.zip_code ?? '')
   }
 
-  const [startDate, setStartDate] = useState(initialStartDate)
-  const [endDate, setEndDate]     = useState(initialEndDate)
-  const [availableVehicles, setAvailableVehicles] = useState<Vehicle[] | null>(null)
-  const [loadingVehicles, setLoadingVehicles] = useTransition()
-  const [pendingVehicleId, setPendingVehicleId] = useState(initialVehicleId)
+  // Búsqueda con debounce contra el servidor
+  const runSearch = useCallback((q: string) => {
+    setSearching(async () => {
+      const results = await searchClients(q)
+      setSearchResults(results as Client[])
+    })
+  }, [setSearching])
 
-  const [selectedVehicleRate, setSelectedVehicleRate] = useState<number | null>(null)
-  const [totalAmount, setTotalAmount] = useState('')
-
-  const [selectedExtras, setSelectedExtras] = useState<string[]>([])
-  const vehicleSelectRef = useRef<HTMLSelectElement>(null)
-
-  // Si venimos del calendario con fechas pre-llenadas, cargar vehículos al montar
   useEffect(() => {
-    if (initialStartDate && initialEndDate && new Date(initialEndDate) > new Date(initialStartDate)) {
-      setLoadingVehicles(async () => {
-        const vehicles = await getAvailableVehicles(initialStartDate, initialEndDate)
-        const list = vehicles as Vehicle[]
-        setAvailableVehicles(list)
-        // Pre-seleccionar el vehículo si viene del calendario
-        if (initialVehicleId) {
-          const v = list.find(v => v.id === initialVehicleId)
-          if (v) {
-            setSelectedVehicleRate(v.daily_rate ?? null)
-            const days = Math.ceil((new Date(initialEndDate).getTime() - new Date(initialStartDate).getTime()) / (1000 * 60 * 60 * 24))
-            if (v.daily_rate && days > 0) setTotalAmount((v.daily_rate * days).toFixed(2))
-          }
-        }
-      })
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => runSearch(clientSearch), 300)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [clientSearch, runSearch])
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (
+        dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+        searchRef.current  && !searchRef.current.contains(e.target as Node)
+      ) setShowDropdown(false)
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // Al cambiar cliente → verificar lista negra
-  function handleClientChange(clientId: string) {
-    setSelectedClientId(clientId)
+  function selectClient(c: Client) {
+    setSelectedClient(c)
+    setClientSearch(c.full_name)
+    setShowDropdown(false)
+    fillClientFields(c)
     setBlacklistStatus(null)
-    if (!clientId) return
-
     setCheckingBlacklist(async () => {
       const supabase = createBrowserClient()
       const { data } = await supabase
-        .from('client_blacklist')
-        .select('id, reason, added_at')
-        .eq('client_id', clientId)
-        .eq('active', true)
-        .maybeSingle()
-
+        .from('client_blacklist').select('id, reason, added_at')
+        .eq('client_id', c.id).eq('active', true).maybeSingle()
       setBlacklistStatus(data
         ? { blacklisted: true, reason: data.reason, addedAt: data.added_at }
         : { blacklisted: false }
@@ -101,289 +198,659 @@ export default function NuevaReservaForm({ clients: initialClients, initialStart
     })
   }
 
-  // Al cambiar fechas → cargar vehículos disponibles
+  function clearClient() {
+    setSelectedClient(null); setClientSearch('')
+    setBlacklistStatus(null); fillClientFields(null)
+    searchRef.current?.focus()
+  }
+
+  // ── Vehículos y fechas ────────────────────────────────────────────────────
+  const [startDate, setStartDate] = useState(initialStartDate)
+  const [endDate,   setEndDate]   = useState(initialEndDate)
+  const [availableVehicles, setAvailableVehicles] = useState<Vehicle[] | null>(null)
+  const [loadingVehicles, setLoadingVehicles]     = useTransition()
+  const [selectedVehicle, setSelectedVehicle]     = useState<Vehicle | null>(null)
+  const [dailyRate, setDailyRate] = useState('')
+  // Controlado para que no se borre si el servidor regresa un error (React resetea los campos no controlados)
+  const [observaciones, setObservaciones] = useState('')
+  const [internalNotes, setInternalNotes] = useState('')
+
+  useEffect(() => {
+    if (initialStartDate && initialEndDate && new Date(initialEndDate) > new Date(initialStartDate)) {
+      setLoadingVehicles(async () => {
+        const list = (await getAvailableVehicles(initialStartDate, initialEndDate)) as Vehicle[]
+        setAvailableVehicles(list)
+        if (initialVehicleId) {
+          const v = list.find(v => v.id === initialVehicleId)
+          if (v) { setSelectedVehicle(v); setDailyRate(String(v.daily_rate ?? '')) }
+        }
+      })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   function handleDateChange(newStart: string, newEnd: string) {
     if (newStart) setStartDate(newStart)
     if (newEnd)   setEndDate(newEnd)
-
-    // Usar || en lugar de ?? para que '' (string vacío) caiga al valor del estado
     const s = newStart || startDate
     const e = newEnd   || endDate
-
-    if (!s || !e || new Date(e) <= new Date(s)) {
-      setAvailableVehicles(null)
-      return
-    }
-
+    if (!s || !e || new Date(e) <= new Date(s)) { setAvailableVehicles(null); return }
     setLoadingVehicles(async () => {
-      const vehicles = await getAvailableVehicles(s, e)
-      setAvailableVehicles(vehicles as Vehicle[])
-      // Reset vehicle selection when dates change
-      setSelectedVehicleRate(null)
-      setTotalAmount('')
+      const list = (await getAvailableVehicles(s, e)) as Vehicle[]
+      setAvailableVehicles(list)
+      setSelectedVehicle(null); setDailyRate('')
     })
   }
 
-  // Al cambiar vehículo → auto-rellenar tarifa sugerida
-  function handleVehicleChange(vehicleId: string) {
-    const vehicle = availableVehicles?.find(v => v.id === vehicleId)
-    const rate = vehicle?.daily_rate ?? null
-    setSelectedVehicleRate(rate)
-    if (rate && startDate && endDate) {
-      const days = Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))
-      setTotalAmount(days > 0 ? (rate * days).toFixed(2) : '')
-    } else {
-      setTotalAmount('')
-    }
-  }
+  const rentalDays = useMemo(() => {
+    if (!startDate || !endDate || new Date(endDate) <= new Date(startDate)) return 0
+    return Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))
+  }, [startDate, endDate])
 
-  function toggleExtra(value: string) {
-    setSelectedExtras(prev =>
-      prev.includes(value) ? prev.filter(e => e !== value) : [...prev, value]
+  // ── Seguros ───────────────────────────────────────────────────────────────
+  const [insChecked, setInsChecked] = useState<Record<string, boolean>>({})
+  // Precios de seguros, extras e impuestos: precargados desde Configuración, editables por reserva
+  const [prices, setPrices] = useState<Record<string, string>>(() =>
+    Object.fromEntries(ALL_PRICE_ITEMS.map(i => [i.key, defaultPrices[i.key] ? String(defaultPrices[i.key]) : '']))
+  )
+  const priceOf = (key: string) => parseFloat(prices[key] || '0') || 0
+
+  // ── Extras & taxes ────────────────────────────────────────────────────────
+  const [extrasChecked, setExtrasChecked] = useState<Record<string, boolean>>({})
+  const [taxesChecked,  setTaxesChecked]  = useState<Record<string, boolean>>({})
+  const [otrosLabel,    setOtrosLabel]    = useState('')
+  const [otrosChecked,  setOtrosChecked]  = useState(false)
+  const [otrosPrice,    setOtrosPrice]    = useState('')
+
+  // ── Pago ──────────────────────────────────────────────────────────────────
+  const [payEfectivo, setPayEfectivo] = useState(false)
+  const [abonoEfectivo, setAbonoEfectivo] = useState('')
+  const [payTarjeta, setPayTarjeta]  = useState(false)
+  const [abonoTarjeta, setAbonoTarjeta] = useState('')
+
+  // Valores del enum payment_method en Postgres: cash | card | mixed
+  const paymentMethod = payEfectivo && payTarjeta ? 'mixed'
+    : payEfectivo ? 'cash'
+    : payTarjeta  ? 'card'
+    : ''
+
+  // ── Cálculo resumen ───────────────────────────────────────────────────────
+  const rate = parseFloat(dailyRate) || 0
+  const rentalSubtotal = rate * rentalDays
+
+  const insuranceTotal = INSURANCES.reduce((sum, ins) =>
+    insChecked[ins.key] ? sum + priceOf(ins.key) * rentalDays : sum, 0)
+
+  const extrasTotal = EXTRAS_FIXED.reduce((sum, e) =>
+    extrasChecked[e.key] ? sum + priceOf(e.key) : sum, 0)
+
+  const otrosTotal = otrosChecked ? (parseFloat(otrosPrice || '0') || 0) : 0
+
+  // Base para impuestos porcentuales: renta + seguros (igual que antes)
+  const taxAmount = (t: PriceItem) =>
+    t.kind === 'pct' ? (rentalSubtotal + insuranceTotal) * (priceOf(t.key) / 100) : priceOf(t.key)
+
+  const taxesTotal = TAXES_FIXED.reduce((sum, t) =>
+    taxesChecked[t.key] ? sum + taxAmount(t) : sum, 0)
+
+  const grandTotal = rentalSubtotal + insuranceTotal + extrasTotal + otrosTotal + taxesTotal
+
+  // ¿El usuario modificó datos del cliente seleccionado? (se guardarán al crear la reserva)
+  const clientDirty = useMemo(() => {
+    if (!selectedClient) return false
+    const c = selectedClient
+    const norm = (v: string | null | undefined) => (v ?? '').trim()
+    const phoneNow  = cPhone.trim() ? `${cPhCode}${cPhone.trim()}` : ''
+    return (
+      norm(c.full_name) !== cName.trim() ||
+      norm(c.phone).replace(/\s+/g, '') !== phoneNow.replace(/\s+/g, '') ||
+      norm(c.email) !== cEmail.trim() ||
+      norm(c.license_number).toUpperCase() !== cLic.trim().toUpperCase() ||
+      norm(c.license_expiry?.split('T')[0]) !== cLicExp ||
+      norm(c.passport_number).toUpperCase() !== cPass.trim().toUpperCase() ||
+      norm(c.passport_expiry?.split('T')[0]) !== cPassExp ||
+      norm(c.address) !== cAddr.trim() ||
+      norm(c.city) !== cCity.trim() ||
+      norm(c.state) !== cState.trim() ||
+      norm(c.zip_code) !== cZip.trim()
     )
-  }
+  }, [selectedClient, cName, cPhCode, cPhone, cEmail, cLic, cLicExp, cPass, cPassExp, cAddr, cCity, cState, cZip])
 
   const isBlacklisted = blacklistStatus?.blacklisted === true
 
+  function insField(key: string) {
+    return {
+      accepted: insChecked[key] ? 'true' : 'false',
+      price:    insChecked[key] ? (prices[key] || '') : '',
+    }
+  }
+
+  // ── Clases helper ─────────────────────────────────────────────────────────
+  const inputCls = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50 placeholder:text-gray-400'
+  const roInputCls = 'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-800'
+
   return (
-    <div className="p-6 max-w-2xl mx-auto">
-      <div className="mb-6">
-        <Link href="/dashboard/reservas" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4">
+    <div className="p-4 md:p-6 max-w-[1400px] mx-auto">
+
+      {/* Header */}
+      <div className="mb-4">
+        <Link href={sectionHref} className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-2">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
           </svg>
-          Reservas
+          {sectionLabel}
         </Link>
-        <h1 className="text-xl font-semibold text-gray-900">Nueva reserva</h1>
+        <h1 className="text-xl font-semibold text-gray-900">{isContract ? 'Nuevo contrato' : 'Nueva reserva'}</h1>
+        {isContract && (
+          <p className="text-sm text-gray-500 mt-0.5">
+            Cliente en mostrador, sin reserva previa. El contrato se abre listo para tomar las fotos de salida y entregar el vehículo.
+          </p>
+        )}
       </div>
 
-      <form action={action} className="space-y-6">
+      <form action={action}>
+        {/* Inputs ocultos */}
+        <input type="hidden" name="client_id"    value={selectedClient?.id ?? ''} />
+        <input type="hidden" name="origin"       value={isContract ? 'walk_in' : 'reservation'} />
+        <input type="hidden" name="total_amount" value={grandTotal > 0 ? grandTotal.toFixed(2) : ''} />
+        <input type="hidden" name="payment_method" value={paymentMethod} />
+        <input type="hidden" name="daily_rate"     value={dailyRate} />
+        {/* Abonos: solo se mandan si su método de pago está activado */}
+        <input type="hidden" name="cash_payment" value={payEfectivo ? abonoEfectivo : ''} />
+        <input type="hidden" name="card_payment" value={payTarjeta ? abonoTarjeta : ''} />
+        <input type="hidden" name="insurance_cdw_accepted" value={insField('cdw').accepted} />
+        <input type="hidden" name="insurance_cdw_price"    value={insField('cdw').price} />
+        <input type="hidden" name="insurance_lia_accepted" value={insField('lia').accepted} />
+        <input type="hidden" name="insurance_lia_price"    value={insField('lia').price} />
+        <input type="hidden" name="insurance_tw_accepted"  value={insField('tw').accepted} />
+        <input type="hidden" name="insurance_tw_price"     value={insField('tw').price} />
+        <input type="hidden" name="insurance_at_accepted"  value={insField('at').accepted} />
+        <input type="hidden" name="insurance_at_price"     value={insField('at').price} />
+
+        {/* Errores y blacklist */}
         {state.error && !state.blacklisted && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{state.error}</div>
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{state.error}</div>
         )}
-
-        {/* Lista negra — bloquea el formulario */}
         {(isBlacklisted || state.blacklisted) && (
-          <BlacklistWarning
-            reason={(blacklistStatus?.reason ?? state.blacklistReason) || 'Cliente en lista negra'}
-            addedAt={blacklistStatus?.addedAt}
-            blocking
-          />
+          <div className="mb-4">
+            <BlacklistWarning
+              reason={(blacklistStatus?.reason ?? state.blacklistReason) || 'Cliente en lista negra'}
+              addedAt={blacklistStatus?.addedAt}
+              blocking
+            />
+          </div>
         )}
 
-        {/* Modal nuevo cliente */}
-        {showClientModal && (
-          <NuevoClienteModal
-            onClientCreated={handleClientCreated}
-            onClose={() => setShowClientModal(false)}
-          />
-        )}
+        {/* ══ LAYOUT PRINCIPAL: main (flex-1) + sidebar (280px) ═══════════ */}
+        <div className="flex gap-5 items-start">
 
-        {/* Cliente */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-          <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Cliente</h2>
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-sm font-medium text-gray-700">Selecciona un cliente *</label>
-              <button
-                type="button"
-                onClick={() => setShowClientModal(true)}
-                disabled={pending}
-                className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-                Nuevo cliente
-              </button>
-            </div>
-            <select
-              name="client_id"
-              value={selectedClientId}
-              onChange={e => handleClientChange(e.target.value)}
-              disabled={pending}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50"
-            >
-              <option value="">— Elige un cliente —</option>
-              {clientsList.map(c => (
-                <option key={c.id} value={c.id}>{c.full_name} · {c.id_number}</option>
-              ))}
-            </select>
-            {checkingBlacklist && <p className="mt-1 text-xs text-gray-400">Verificando lista negra...</p>}
-            {state.fieldErrors?.client_id && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.client_id[0]}</p>}
-          </div>
-        </div>
+          {/* ═══ COLUMNA PRINCIPAL ══════════════════════════════════════════ */}
+          <div className="flex-1 min-w-0 space-y-4">
 
-        {/* Fechas */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-          <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Periodo</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Fecha y hora de salida *</label>
-              <input
-                type="datetime-local"
-                name="start_date"
-                value={startDate}
-                onChange={e => handleDateChange(e.target.value, '')}
-                disabled={pending}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-              />
-              {state.fieldErrors?.start_date && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.start_date[0]}</p>}
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Fecha y hora de regreso *</label>
-              <input
-                type="datetime-local"
-                name="end_date"
-                value={endDate}
-                onChange={e => handleDateChange('', e.target.value)}
-                disabled={pending}
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-              />
-              {state.fieldErrors?.end_date && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.end_date[0]}</p>}
-            </div>
-          </div>
-          {startDate && endDate && new Date(endDate) > new Date(startDate) && (
-            <p className="text-xs text-gray-500">
-              Duración:{' '}
-              {Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))} día(s)
-            </p>
-          )}
-        </div>
+            {/* ── Datos del Cliente ──────────────────────────────────────── */}
+            <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-semibold text-gray-800">Datos del Cliente</h2>
+              </div>
 
-        {/* Vehículo */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
-          <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Vehículo</h2>
-          {!startDate || !endDate ? (
-            <p className="text-sm text-gray-400">Selecciona las fechas para ver los vehículos disponibles.</p>
-          ) : loadingVehicles ? (
-            <div className="flex items-center gap-2 text-sm text-gray-400">
-              <div className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full" />
-              Buscando vehículos disponibles...
-            </div>
-          ) : availableVehicles !== null ? (
-            availableVehicles.length === 0 ? (
-              <p className="text-sm text-orange-600">No hay vehículos disponibles para esas fechas.</p>
-            ) : (
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Vehículo disponible * <span className="text-gray-400 font-normal">({availableVehicles.length} opción{availableVehicles.length !== 1 ? 'es' : ''})</span>
-                  </label>
-                  <select
-                    name="vehicle_id"
-                    ref={vehicleSelectRef}
+              {/* Autocomplete buscar cliente */}
+              <div className="relative mb-4">
+                <div className={`flex items-center gap-2 border rounded-lg px-3 py-2 ${selectedClient ? 'border-blue-300 bg-blue-50' : 'border-gray-300 bg-white'}`}>
+                  <svg className="w-4 h-4 text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 15.803 7.5 7.5 0 0016.803 15.803z" />
+                  </svg>
+                  <input
+                    ref={searchRef}
+                    type="text"
+                    value={clientSearch}
+                    onChange={e => {
+                      setClientSearch(e.target.value)
+                      setShowDropdown(true)
+                      if (selectedClient && e.target.value !== selectedClient.full_name) {
+                        setSelectedClient(null); fillClientFields(null); setBlacklistStatus(null)
+                      }
+                    }}
+                    onFocus={() => setShowDropdown(true)}
+                    placeholder="Buscar cliente existente por nombre, licencia o ID... (si es nuevo, llena los datos abajo)"
                     disabled={pending}
-                    defaultValue={initialVehicleId}
-                    onChange={e => handleVehicleChange(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50"
-                  >
-                    <option value="">— Elige un vehículo —</option>
-                    {availableVehicles.map(v => (
-                      <option key={v.id} value={v.id}>
-                        {v.brand} {v.model} {v.year} · {v.plates} · {v.color}
-                        {v.daily_rate ? ` · RD$${v.daily_rate}/día` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {state.fieldErrors?.vehicle_id && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.vehicle_id[0]}</p>}
+                    className="flex-1 text-sm bg-transparent outline-none placeholder:text-gray-400"
+                  />
+                  {selectedClient && (
+                    <button type="button" onClick={clearClient} className="text-gray-400 hover:text-gray-600">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                  {checkingBlacklist && (
+                    <div className="animate-spin w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full" />
+                  )}
+                </div>
+                {showDropdown && !selectedClient && (
+                  <div ref={dropdownRef} className="absolute z-30 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                    {searching ? (
+                      <div className="flex items-center gap-2 px-4 py-3 text-sm text-gray-400">
+                        <div className="animate-spin w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full" />
+                        Buscando...
+                      </div>
+                    ) : searchResults.length === 0 ? (
+                      <p className="px-4 py-3 text-sm text-gray-400">No se encontraron clientes.</p>
+                    ) : (
+                      <ul className="max-h-48 overflow-y-auto divide-y divide-gray-50">
+                        {searchResults.map(c => (
+                          <li key={c.id}>
+                            <button type="button" onClick={() => selectClient(c)}
+                              className="w-full text-left px-4 py-2.5 hover:bg-blue-50 transition-colors">
+                              <p className="text-sm font-medium text-gray-900">{c.full_name}</p>
+                              <p className="text-xs text-gray-500">{c.id_number}{c.license_number ? ` · Lic: ${c.license_number}` : ''}</p>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+                {state.fieldErrors?.client_id && (
+                  <p className="mt-1 text-xs text-red-600">{state.fieldErrors.client_id[0]}</p>
+                )}
+              </div>
+
+              {/* Grid 2 columnas: campos del cliente */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+
+                {/* Izquierda */}
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Nombre Completo <span className="text-red-500">*</span></label>
+                    <input type="text" name="client_full_name" value={cName} onChange={e => setCName(clean.name(e.target.value, 150))}
+                      maxLength={150} autoComplete="name"
+                      placeholder="—" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Teléfono / Celular <span className="text-red-500">*</span></label>
+                    <div className="flex gap-2">
+                      <select name="client_phone_code" value={cPhCode} onChange={e => setCPhCode(e.target.value)}
+                        className="px-2 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500" style={{ minWidth: 80 }}>
+                        {LADAS.map((l, i) => <option key={i} value={l.code}>{l.flag} {l.code}</option>)}
+                      </select>
+                      <input type="tel" name="client_phone" value={cPhone}
+                        onChange={e => setCPhone(clean.digits(e.target.value, PHONE_MAX))}
+                        inputMode="numeric" pattern="[0-9]*" maxLength={PHONE_MAX} autoComplete="tel-national"
+                        placeholder="Solo números" className={`flex-1 ${inputCls}`} />
+                    </div>
+                    {cPhone.length > 0 && cPhone.length < PHONE_MIN && (
+                      <p className="mt-1 text-xs text-red-600">El número debe tener al menos {PHONE_MIN} dígitos.</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Email (Opcional)</label>
+                    <input type="email" name="client_email" value={cEmail} onChange={e => setCEmail(clean.email(e.target.value, 150))}
+                      maxLength={150} autoComplete="email"
+                      placeholder="—" className={inputCls} />
+                  </div>
                 </div>
 
-                {/* Tarifa y total */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Total a cobrar (RD$)
-                    {selectedVehicleRate && startDate && endDate && new Date(endDate) > new Date(startDate) && (
-                      <span className="ml-2 text-xs text-gray-400 font-normal">
-                        Tarifa sugerida: RD${selectedVehicleRate}/día × {Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))} día(s)
-                      </span>
-                    )}
-                  </label>
-                  <input
-                    type="number"
-                    name="total_amount"
-                    min="0"
-                    step="0.01"
-                    value={totalAmount}
-                    onChange={e => setTotalAmount(e.target.value)}
-                    disabled={pending}
-                    placeholder="0.00"
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                  />
-                  <p className="mt-1 text-xs text-gray-400">Se calcula automáticamente al seleccionar el vehículo. Puedes ajustarlo manualmente.</p>
+                {/* Derecha */}
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Licencia de Conducir <span className="text-red-500">*</span></label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="text" name="client_license_number" value={cLic} onChange={e => setCLic(clean.doc(e.target.value, 30))} maxLength={30}
+                        placeholder="—" className={`${inputCls} uppercase`} />
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Fecha de Vencimiento <span className="text-red-500">*</span></label>
+                        <input type="date" name="client_license_expiry" value={cLicExp} onChange={e => setCLicExp(e.target.value)}
+                          className={inputCls} />
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Pasaporte o Identificación</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="text" name="client_passport_number" value={cPass} onChange={e => setCPass(clean.doc(e.target.value, 30))} maxLength={30}
+                        placeholder="—" className={`${inputCls} uppercase`} />
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Fecha de Vencimiento</label>
+                        <input type="date" name="client_passport_expiry" value={cPassExp} onChange={e => setCPassExp(e.target.value)}
+                          className={inputCls} />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-            )
-          ) : null}
-        </div>
-
-        {/* Extras */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
-          <h2 className="text-sm font-medium text-gray-700 border-b border-gray-100 pb-3">Extras (opcional)</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {EXTRAS.map(e => (
-              <label key={e.value} className="flex items-center gap-2.5 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  name="extras"
-                  value={e.value}
-                  checked={selectedExtras.includes(e.value)}
-                  onChange={() => toggleExtra(e.value)}
-                  disabled={pending}
-                  className="rounded"
-                />
-                <span className="text-sm text-gray-700 group-hover:text-gray-900">{e.label}</span>
-              </label>
-            ))}
-          </div>
-          {selectedExtras.includes('custom') && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">Descripción del extra personalizado</label>
-              <input
-                type="text"
-                name="custom_extra"
-                disabled={pending}
-                placeholder="Ej. Portabicicletas, toldo, etc."
-                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 disabled:opacity-50"
-              />
+              {/* Dirección: fila completa debajo de las dos columnas */}
+              <div className="mt-3">
+                <label className="block text-xs font-medium text-gray-600 mb-1">Dirección</label>
+                <div className="grid grid-cols-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_7rem] gap-2">
+                  <input type="text" name="client_address" value={cAddr} onChange={e => setCAddr(e.target.value.slice(0, 200))} maxLength={200}
+                    placeholder="Calle, número, sector" className={`col-span-2 md:col-span-1 ${inputCls}`} />
+                  <input type="text" name="client_city" value={cCity} onChange={e => setCCity(clean.name(e.target.value, 100))} maxLength={100}
+                    placeholder="Ciudad" className={inputCls} />
+                  <input type="text" name="client_state" value={cState} onChange={e => setCState(clean.name(e.target.value, 100))} maxLength={100}
+                    placeholder="Estado / Provincia" className={inputCls} />
+                  <input type="text" name="client_zip_code" value={cZip} onChange={e => setCZip(clean.digits(e.target.value, 10))}
+                    inputMode="numeric" pattern="[0-9]*" maxLength={10}
+                    placeholder="Zip" className={`col-span-2 md:col-span-1 ${inputCls}`} />
+                </div>
+              </div>
+              {!selectedClient && cName.trim() && (
+                <p className="mt-3 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                  Cliente nuevo: se dará de alta con estos datos al {isContract ? 'abrir el contrato' : 'crear la reserva'}.
+                </p>
+              )}
+              {clientDirty && (
+                <p className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  Modificaste datos del cliente. Los cambios se guardarán en su ficha al {isContract ? 'abrir el contrato' : 'crear la reserva'}.
+                </p>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Notas */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5">
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Notas internas</label>
-          <textarea
-            name="notes"
-            rows={3}
-            disabled={pending}
-            placeholder="Instrucciones especiales, acuerdos, etc."
-            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400 disabled:opacity-50"
-          />
-        </div>
+            {/* ── Datos del Vehículo + Datos de la Renta ─────────────────── */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Acciones */}
-        <div className="flex gap-3">
-          <Link href="/dashboard/reservas" className="flex-1 text-center py-2.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-            Cancelar
-          </Link>
-          <button
-            type="submit"
-            disabled={pending || isBlacklisted || !availableVehicles || availableVehicles.length === 0}
-            className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {pending ? (
-              <>
-                <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Guardando...
-              </>
-            ) : 'Crear reserva'}
-          </button>
-        </div>
+              {/* Vehículo */}
+              <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+                <h2 className="text-sm font-semibold text-gray-800">Datos del Vehículo</h2>
+                {!startDate || !endDate ? (
+                  <p className="text-xs text-gray-400">Completa las fechas para ver vehículos disponibles.</p>
+                ) : loadingVehicles ? (
+                  <div className="flex items-center gap-2 text-sm text-gray-400">
+                    <div className="animate-spin w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full" />
+                    Buscando...
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        Ficha del Vehículo <span className="text-red-500">*</span>
+                        {availableVehicles && (
+                          <span className="text-gray-400 font-normal ml-1">({availableVehicles.length} disponible{availableVehicles.length !== 1 ? 's' : ''})</span>
+                        )}
+                      </label>
+                      {availableVehicles?.length === 0 ? (
+                        <p className="text-sm text-orange-600 py-2">No hay vehículos disponibles para esas fechas.</p>
+                      ) : (
+                        <select
+                          name="vehicle_id"
+                          value={selectedVehicle?.id ?? ''}
+                          disabled={pending}
+                          onChange={e => {
+                            const v = availableVehicles?.find(v => v.id === e.target.value) ?? null
+                            setSelectedVehicle(v)
+                            setDailyRate(v?.daily_rate ? String(v.daily_rate) : '')
+                          }}
+                          className={inputCls}
+                        >
+                          <option value="">— Selecciona —</option>
+                          {(availableVehicles ?? []).map(v => (
+                            <option key={v.id} value={v.id}>
+                              {v.brand} {v.model} {v.year} · {v.color}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {state.fieldErrors?.vehicle_id && (
+                        <p className="mt-1 text-xs text-red-600">{state.fieldErrors.vehicle_id[0]}</p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Placa</label>
+                      <div className={roInputCls}>{selectedVehicle?.plates || '—'}</div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Renta */}
+              <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+                <h2 className="text-sm font-semibold text-gray-800">Datos de la Renta</h2>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de Salida <span className="text-red-500">*</span></label>
+                  <input type="datetime-local" name="start_date" value={startDate}
+                    onChange={e => handleDateChange(e.target.value, '')} disabled={pending} className={inputCls} />
+                  {state.fieldErrors?.start_date && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.start_date[0]}</p>}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de Retorno <span className="text-red-500">*</span></label>
+                  <input type="datetime-local" name="end_date" value={endDate}
+                    onChange={e => handleDateChange('', e.target.value)} disabled={pending} className={inputCls} />
+                  {state.fieldErrors?.end_date && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.end_date[0]}</p>}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Tarifa por Día</label>
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-gray-500">RD$</span>
+                      <input type="number" min="0" step="0.01" inputMode="decimal" onKeyDown={blockNonNumericKeys} value={dailyRate}
+                        onChange={e => setDailyRate(e.target.value)} disabled={pending}
+                        placeholder="0.00" className={inputCls} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad de Días</label>
+                    <div className={`${roInputCls} font-medium text-blue-700`}>
+                      {rentalDays > 0 ? rentalDays : '—'}
+                    </div>
+                  </div>
+                </div>
+                {rentalSubtotal > 0 && (
+                  <div className="grid grid-cols-2 gap-3 pt-1 border-t border-gray-100">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Subtotal Renta</label>
+                      <div className={roInputCls}>RD${rentalSubtotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Total General</label>
+                      <div className={`${roInputCls} font-bold text-blue-700`}>
+                        RD${grandTotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── Observaciones | Notas Internas | Método de Pago ────────── */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-white border border-gray-200 rounded-xl p-5">
+                <label className="block text-sm font-semibold text-gray-800 mb-2">Observaciones</label>
+                <textarea name="notes" rows={4} disabled={pending}
+                  value={observaciones} onChange={e => setObservaciones(e.target.value)}
+                  placeholder="Observaciones del contrato..."
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400 disabled:opacity-50" />
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-5">
+                <label className="block text-sm font-semibold text-gray-800 mb-2">Notas Internas</label>
+                <textarea name="internal_notes" rows={4} disabled={pending}
+                  value={internalNotes} onChange={e => setInternalNotes(e.target.value)}
+                  placeholder="Instrucciones internas (uso interno)..."
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400 disabled:opacity-50" />
+              </div>
+              <div className="bg-white border border-gray-200 rounded-xl p-5">
+                <h2 className="text-sm font-semibold text-gray-800 mb-3">Método de Pago</h2>
+                <div className="space-y-3">
+                  <Toggle label="Pagos en Efectivo"        checked={payEfectivo} onChange={setPayEfectivo} />
+                  {payEfectivo && (
+                    <input type="number" min="0" step="0.01" inputMode="decimal" onKeyDown={blockNonNumericKeys} value={abonoEfectivo}
+                      onChange={e => setAbonoEfectivo(e.target.value)} placeholder="Abono en Efectivo"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400" />
+                  )}
+                  <Toggle label="Pagos en Tarjeta de Crédito" checked={payTarjeta} onChange={setPayTarjeta} />
+                  {payTarjeta && (
+                    <input type="number" min="0" step="0.01" inputMode="decimal" onKeyDown={blockNonNumericKeys} value={abonoTarjeta}
+                      onChange={e => setAbonoTarjeta(e.target.value)} placeholder="Abono en Tarjeta"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400" />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ── Botones ─────────────────────────────────────────────────── */}
+            <div className="flex gap-3 pb-4">
+              <Link href={sectionHref}
+                className="flex-1 text-center py-2.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                Cancelar
+              </Link>
+              <button
+                type="submit"
+                disabled={pending || isBlacklisted || (!selectedClient && !cName.trim()) || (cPhone.length > 0 && cPhone.length < PHONE_MIN) || !availableVehicles || availableVehicles.length === 0}
+                className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pending ? (
+                  <>
+                    <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Guardando...
+                  </>
+                ) : isContract ? 'Abrir contrato' : 'Crear reserva'}
+              </button>
+            </div>
+          </div>{/* fin columna principal */}
+
+          {/* ═══ SIDEBAR ════════════════════════════════════════════════════ */}
+          <div className="w-64 flex-shrink-0 space-y-4 sticky top-4">
+
+            {/* Seguros, Impuestos y Extras */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <h2 className="text-sm font-semibold text-gray-800 mb-3">Seguros, Impuestos y Extras</h2>
+
+              {/* Seguros */}
+              <div className="space-y-1.5 mb-3">
+                {INSURANCES.map(ins => (
+                  <div key={ins.key}>
+                    <label className="flex items-center gap-2 cursor-pointer group py-1">
+                      <input type="checkbox" checked={!!insChecked[ins.key]}
+                        onChange={() => setInsChecked(p => ({ ...p, [ins.key]: !p[ins.key] }))}
+                        className="rounded accent-blue-600 flex-shrink-0" />
+                      <span className="text-xs text-gray-700 group-hover:text-gray-900 flex-1">{ins.label}</span>
+                    </label>
+                    {insChecked[ins.key] && (
+                      <PriceField item={ins} value={prices[ins.key] ?? ''}
+                        onChange={v => setPrices(p => ({ ...p, [ins.key]: v }))} />
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t border-gray-100 pt-2.5 space-y-1.5 mb-3">
+                {EXTRAS_FIXED.map(e => (
+                  <div key={e.key}>
+                    <label className="flex items-center gap-2 cursor-pointer group py-1">
+                      <input type="checkbox" checked={!!extrasChecked[e.key]}
+                        onChange={() => setExtrasChecked(p => ({ ...p, [e.key]: !p[e.key] }))}
+                        className="rounded accent-blue-600 flex-shrink-0" />
+                      <span className="text-xs text-gray-700 group-hover:text-gray-900 flex-1">{e.label}</span>
+                    </label>
+                    {extrasChecked[e.key] && (
+                      <PriceField item={e} value={prices[e.key] ?? ''}
+                        onChange={v => setPrices(p => ({ ...p, [e.key]: v }))} />
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="border-t border-gray-100 pt-2.5 space-y-1.5 mb-3">
+                {TAXES_FIXED.map(t => (
+                  <div key={t.key}>
+                    <label className="flex items-center gap-2 cursor-pointer group py-1">
+                      <input type="checkbox" checked={!!taxesChecked[t.key]}
+                        onChange={() => setTaxesChecked(p => ({ ...p, [t.key]: !p[t.key] }))}
+                        className="rounded accent-blue-600 flex-shrink-0" />
+                      <span className="text-xs text-gray-700 group-hover:text-gray-900 flex-1">{t.label}</span>
+                    </label>
+                    {taxesChecked[t.key] && (
+                      <PriceField item={t} value={prices[t.key] ?? ''}
+                        onChange={v => setPrices(p => ({ ...p, [t.key]: v }))} />
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Otros */}
+              <div className="border-t border-gray-100 pt-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-600 font-medium w-10">Otros:</span>
+                  <input type="text" value={otrosLabel} onChange={e => setOtrosLabel(e.target.value)}
+                    placeholder="Descripción..."
+                    className="flex-1 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 placeholder:text-gray-400" />
+                  <input type="checkbox" checked={otrosChecked}
+                    onChange={e => setOtrosChecked(e.target.checked)}
+                    className="rounded accent-blue-600" />
+                </div>
+                {otrosChecked && (
+                  <div className="mt-1.5">
+                    <PriceField item={{ key: 'otros', label: 'Otros', kind: 'flat', fallback: 0 }}
+                      value={otrosPrice} onChange={setOtrosPrice} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Resumen */}
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <h2 className="text-sm font-semibold text-gray-800 mb-3">Resumen</h2>
+              {grandTotal === 0 ? (
+                <p className="text-xs text-gray-400">Selecciona vehículo y fechas.</p>
+              ) : (
+                <div className="space-y-1.5 text-xs">
+                  {rentalSubtotal > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Renta ({rentalDays}d × RD${rate})</span>
+                      <span className="font-medium">RD${rentalSubtotal.toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                    </div>
+                  )}
+                  {INSURANCES.filter(i => insChecked[i.key] && priceOf(i.key) > 0).map(ins => (
+                    <div key={ins.key} className="flex justify-between">
+                      <span className="text-gray-600 truncate mr-2">{ins.label.split('/')[0].trim()}</span>
+                      <span className="font-medium whitespace-nowrap">RD${(priceOf(ins.key) * rentalDays).toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                    </div>
+                  ))}
+                  {EXTRAS_FIXED.filter(e => extrasChecked[e.key] && priceOf(e.key) > 0).map(e => (
+                    <div key={e.key} className="flex justify-between">
+                      <span className="text-gray-600 truncate mr-2">{e.label.split('/')[0].trim()}</span>
+                      <span className="font-medium whitespace-nowrap">RD${priceOf(e.key).toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                    </div>
+                  ))}
+                  {otrosTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-600 truncate mr-2">{otrosLabel.trim() || 'Otros'}</span>
+                      <span className="font-medium whitespace-nowrap">RD${otrosTotal.toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                    </div>
+                  )}
+                  {TAXES_FIXED.filter(t => taxesChecked[t.key]).map(t => (
+                    <div key={t.key} className="flex justify-between">
+                      <span className="text-gray-600 truncate mr-2">
+                        {t.label.split('/')[0].trim()}{t.kind === 'pct' ? ` (${priceOf(t.key)}%)` : ''}
+                      </span>
+                      <span className="font-medium whitespace-nowrap">RD${taxAmount(t).toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                    </div>
+                  ))}
+                  <div className="border-t border-gray-200 pt-1.5 mt-1.5 flex justify-between">
+                    <span className="font-semibold text-gray-800">Total</span>
+                    <span className="font-bold text-blue-700 text-sm">RD${grandTotal.toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+          </div>{/* fin sidebar */}
+        </div>{/* fin flex */}
       </form>
+    </div>
+  )
+}
+
+// ── Toggle switch ─────────────────────────────────────────────────────────────
+function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-sm text-gray-700">{label}</span>
+      <button type="button" role="switch" aria-checked={checked} onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-red-500' : 'bg-gray-200'}`}>
+        <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
+      </button>
     </div>
   )
 }

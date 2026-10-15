@@ -3,17 +3,12 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-
-const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
-  pending:   { label: 'Pendiente',   className: 'bg-yellow-100 text-yellow-700' },
-  confirmed: { label: 'Confirmada',  className: 'bg-blue-100 text-blue-700' },
-  active:    { label: 'En curso',    className: 'bg-green-100 text-green-700' },
-  completed: { label: 'Completada',  className: 'bg-gray-100 text-gray-600' },
-  cancelled: { label: 'Cancelada',   className: 'bg-red-100 text-red-600' },
-}
+import { rentalFolio, statusStyle } from '@/lib/rentalLabels'
 
 interface Reservation {
   id: string
+  number: number | null
+  origin: string
   status: string
   start_date: string
   end_date: string
@@ -34,7 +29,7 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
           if (!profile?.tenant_id) return
           supabase
             .from('reservations')
-            .select('id, status, start_date, end_date, created_at, vehicles ( brand, model, plates )')
+            .select('id, number, origin, status, start_date, end_date, created_at, vehicles ( brand, model, plates )')
             .eq('client_id', clientId)
             .eq('tenant_id', profile.tenant_id)
             .order('created_at', { ascending: false })
@@ -79,6 +74,7 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
+              <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">No.</th>
               <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Vehículo</th>
               <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Período</th>
               <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
@@ -88,9 +84,10 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
           <tbody className="divide-y divide-gray-100">
             {reservations.map(r => {
               const v = r.vehicles
-              const cfg = STATUS_CONFIG[r.status] ?? { label: r.status, className: 'bg-gray-100 text-gray-600' }
+              const cfg = statusStyle(r.status, r.origin)
               return (
                 <tr key={r.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-3 font-mono text-xs text-gray-700 whitespace-nowrap">{rentalFolio(r.origin, r.number)}</td>
                   <td className="px-4 py-3">
                     {v ? (
                       <>

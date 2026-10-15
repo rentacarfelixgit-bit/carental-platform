@@ -2,6 +2,9 @@
 // Contrato imprimible — layout fiel al contrato físico de Felix Castillo Car Rental
 
 import { createClient } from '@/lib/supabase/server'
+import { rentalFolio } from '@/lib/rentalLabels'
+import { EQUIPMENT_CONDITION, EQUIPMENT_TYPES, type EquipmentCondition, type EquipmentType } from '@/lib/equipment'
+import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
 import { redirect } from 'next/navigation'
 import PrintTrigger from './PrintTrigger'
 import PrintButton from './PrintButton'
@@ -139,7 +142,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const { data: reservation } = await supabase
     .from('reservations')
     .select(`
-      id, start_date, end_date, status, notes, total_amount,
+      id, number, origin, start_date, end_date, status, notes, total_amount,
       clients ( id, full_name, id_type, id_number, license_number, license_expiry, passport_number, phone, email, address, city, state, zip_code, local_phone, local_address ),
       vehicles ( id, plates, brand, model, year, color, vin ),
       reservation_extras ( id, extra_type, description )
@@ -180,17 +183,60 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
   const { data: checkout } = await supabase
     .from('inspections').select('odometer, fuel_level, notes')
-    .eq('reservation_id', id).eq('type', 'checkout').maybeSingle()
+    .eq('reservation_id', id).eq('type', 'checkout').is('swap_id', null).maybeSingle()
 
   const { data: checkin } = await supabase
     .from('inspections').select('odometer, fuel_level, notes')
-    .eq('reservation_id', id).eq('type', 'checkin').maybeSingle()
+    .eq('reservation_id', id).eq('type', 'checkin').is('swap_id', null).maybeSingle()
 
   const nights = Math.ceil(
     (new Date(reservation.end_date).getTime() - new Date(reservation.start_date).getTime()) / 86400000
   )
 
-  const contratoNum = id.slice(0, 8).toUpperCase()
+  // ── Anexo: equipo entregado y cargos adicionales (documentación de cargos) ──
+  const [{ data: annexEquipment }, { data: annexCharges }, { data: annexSwaps }] = await Promise.all([
+    supabase
+      .from('rental_equipment')
+      .select(`assigned_at, returned_at, return_condition, return_notes,
+        equipment_items ( code, type, name ),
+        assigner:users!rental_equipment_assigned_by_fkey ( full_name ),
+        returner:users!rental_equipment_returned_by_fkey ( full_name )`)
+      .eq('reservation_id', id)
+      .order('assigned_at'),
+    supabase
+      .from('rental_charges')
+      .select('concept, amount, reason, photo_paths, created_at, creator:users!rental_charges_created_by_fkey ( full_name )')
+      .eq('reservation_id', id)
+      .order('created_at'),
+    supabase
+      .from('reservation_vehicle_swaps')
+      .select(`id, reason, keep_price, swap_at, completed_at, days_used, days_remaining, old_total, new_total, notes,
+        from_vehicle:vehicles!reservation_vehicle_swaps_from_vehicle_id_fkey ( brand, model, plates ),
+        to_vehicle:vehicles!reservation_vehicle_swaps_to_vehicle_id_fkey ( brand, model, plates ),
+        creator:users!reservation_vehicle_swaps_created_by_fkey ( full_name ),
+        inspections ( type, odometer, fuel_level )`)
+      .eq('reservation_id', id)
+      .eq('status', 'completed')
+      .order('completed_at'),
+  ])
+  const oneName = (v: unknown) => ((Array.isArray(v) ? v[0] : v) as { full_name?: string } | null)?.full_name ?? '—'
+  const annexPhotoPaths = (annexCharges ?? []).flatMap(c => (c.photo_paths ?? []) as string[])
+  const annexSigned: Record<string, string> = {}
+  if (annexPhotoPaths.length) {
+    const { data: urls } = await supabase.storage.from('inspection-photos').createSignedUrls(annexPhotoPaths, 3600)
+    urls?.forEach(u => { if (u.path && u.signedUrl) annexSigned[u.path] = u.signedUrl })
+  }
+  const annexChargesTotal = (annexCharges ?? []).reduce((acc, c) => acc + Number(c.amount), 0)
+  const hasAnnex = (annexEquipment?.length ?? 0) > 0 || (annexCharges?.length ?? 0) > 0 || (annexSwaps?.length ?? 0) > 0
+  const swapVeh = (v: unknown) => {
+    const o = (Array.isArray(v) ? v[0] : v) as { brand: string; model: string; plates: string } | null
+    return o ? `${o.brand} ${o.model} · ${o.plates}` : '—'
+  }
+  const fmtRD = (n: number) => `RD$${n.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  const fmtDT = (d: string) => new Date(d).toLocaleString('es-DO', { dateStyle: 'short', timeStyle: 'short' })
+
+  // Folio consecutivo: R-0001 (reserva) o C-0001 (contrato de mostrador). El PDF siempre dice "Contrato".
+  const contratoNum = reservation.number ? rentalFolio(reservation.origin, reservation.number) : id.slice(0, 8).toUpperCase()
   const companyName = tenant?.name ?? 'Savings Car Rental'
   const s = (tenant?.settings as Record<string, unknown>) ?? {}
   const bizAddress = s.address ? `DIRECCIÓN: ${String(s.address).toUpperCase()}.` : 'DIRECCIÓN: AVENIDA VICTOR MANUEL ESPAILLAT UVERAL, LICEY AL MEDIO.'
@@ -779,6 +825,157 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
           </table>
 
         </div>{/* fin página 2 */}
+
+        {/* ── Anexo: equipo entregado y cargos adicionales ─────────────────── */}
+        {hasAnnex && (
+          <div className="page">
+            <div className="co-title">{companyName}</div>
+            <div className="co-sub">Anexo al contrato No. {contratoNum}</div>
+
+            {(annexSwaps?.length ?? 0) > 0 && (
+              <>
+                <div className="section-hdr" style={{ marginTop: 6 }}>Cambios de vehículo</div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }}>
+                  <thead>
+                    <tr>
+                      {['FECHA', 'VEHÍCULO RECIBIDO', 'VEHÍCULO ENTREGADO', 'MOTIVO', 'PRECIO'].map(h => (
+                        <th key={h} style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5, textAlign: 'left' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(annexSwaps ?? []).map(sw => {
+                      const insp = (sw.inspections ?? []) as { type: string; odometer: number; fuel_level: string }[]
+                      const rec = insp.find(i => i.type === 'checkin')
+                      const ent = insp.find(i => i.type === 'checkout')
+                      return (
+                        <tr key={sw.id}>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5, whiteSpace: 'nowrap' }}>
+                            {fmtDT(sw.completed_at ?? sw.swap_at)}<br />{oneName(sw.creator)}
+                          </td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>
+                            {swapVeh(sw.from_vehicle)}{rec && <><br />KM {rec.odometer.toLocaleString()}</>}
+                          </td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>
+                            {swapVeh(sw.to_vehicle)}{ent && <><br />KM {ent.odometer.toLocaleString()}</>}
+                          </td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>
+                            {SWAP_REASONS[sw.reason as SwapReason]?.label}{sw.notes && <><br />{sw.notes}</>}
+                          </td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>
+                            {sw.keep_price
+                              ? 'SIN CAMBIO DE PRECIO'
+                              : <>{sw.days_used} DÍA(S) TARIFA ORIGINAL · {sw.days_remaining} DÍA(S) TARIFA NUEVA<br />
+                                  TOTAL {sw.old_total != null ? fmtRD(Number(sw.old_total)) : '—'} → {sw.new_total != null ? fmtRD(Number(sw.new_total)) : '—'}</>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </>
+            )}
+
+            {(annexEquipment?.length ?? 0) > 0 && (
+              <>
+                <div className="section-hdr" style={{ marginTop: 6 }}>Equipo entregado al arrendatario</div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 8 }}>
+                  <thead>
+                    <tr>
+                      {['CÓDIGO', 'ARTÍCULO', 'ENTREGADO', 'DEVOLUCIÓN', 'OBSERVACIONES'].map(h => (
+                        <th key={h} style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5, textAlign: 'left' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(annexEquipment ?? []).map((e, i) => {
+                      const it = (Array.isArray(e.equipment_items) ? e.equipment_items[0] : e.equipment_items) as unknown as { code: string; type: string; name: string | null } | null
+                      const cond = e.return_condition ? EQUIPMENT_CONDITION[e.return_condition as EquipmentCondition]?.label : null
+                      return (
+                        <tr key={i}>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700 }}>{it?.code}</td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8 }}>{it?.name || EQUIPMENT_TYPES[it?.type as EquipmentType]?.label}</td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>{fmtDT(e.assigned_at)} · {oneName(e.assigner)}</td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>
+                            {e.returned_at ? <>{cond} · {fmtDT(e.returned_at)} · {oneName(e.returner)}</> : 'PENDIENTE'}
+                          </td>
+                          <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>{e.return_notes ?? ''}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+                <div className="note-block" style={{ marginBottom: 8 }}>
+                  EL ARRENDATARIO RECIBE EL EQUIPO ARRIBA DESCRITO EN BUEN ESTADO Y SE COMPROMETE A DEVOLVERLO EN LAS MISMAS CONDICIONES.
+                  EN CASO DE DAÑO O PÉRDIDA, ACEPTA EL CARGO CORRESPONDIENTE.
+                </div>
+              </>
+            )}
+
+            {(annexCharges?.length ?? 0) > 0 && (
+              <>
+                <div className="section-hdr">Cargos adicionales</div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 6 }}>
+                  <thead>
+                    <tr>
+                      {['FECHA', 'CONCEPTO', 'MOTIVO', 'REGISTRÓ', 'MONTO'].map(h => (
+                        <th key={h} style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5, textAlign: h === 'MONTO' ? 'right' : 'left' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(annexCharges ?? []).map((c, i) => (
+                      <tr key={i}>
+                        <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5, whiteSpace: 'nowrap' }}>{fmtDT(c.created_at)}</td>
+                        <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700 }}>{c.concept}</td>
+                        <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>{c.reason}</td>
+                        <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>{oneName(c.creator)}</td>
+                        <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, textAlign: 'right', whiteSpace: 'nowrap' }}>{fmtRD(Number(c.amount))}</td>
+                      </tr>
+                    ))}
+                    <tr>
+                      <td colSpan={4} style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700, textAlign: 'right' }}>TOTAL CARGOS ADICIONALES:</td>
+                      <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700, textAlign: 'right' }}>{fmtRD(annexChargesTotal)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+
+                {/* Evidencia fotográfica */}
+                {annexPhotoPaths.some(p => annexSigned[p]) && (
+                  <>
+                    <div style={{ fontSize: 7.5, fontWeight: 700, margin: '4px 0 3px' }}>EVIDENCIA FOTOGRÁFICA:</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                      {annexPhotoPaths.filter(p => annexSigned[p]).map((p, i) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img key={i} src={annexSigned[p]} alt={`Evidencia ${i + 1}`} style={{ width: '31%', aspectRatio: '4 / 3', objectFit: 'cover', border: '0.7px solid #000' }} />
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                <div className="note-block" style={{ marginBottom: 10 }}>
+                  EL ARRENDATARIO RECONOCE Y ACEPTA LOS CARGOS ADICIONALES DESCRITOS, QUE SE SUMAN AL MONTO DEL CONTRATO No. {contratoNum},
+                  Y AUTORIZA SU COBRO POR EL MISMO MEDIO DE PAGO UTILIZADO EN LA RENTA.
+                </div>
+              </>
+            )}
+
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 12 }}>
+              <tbody>
+                <tr>
+                  <td style={{ border: '0.7px solid #000', padding: '2px 4px', width: '50%' }}>
+                    <div className="sig-label">FIRMA DEL CLIENTE (ACEPTO):</div>
+                    <div className="sig-line" style={{ minHeight: 28 }} />
+                  </td>
+                  <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
+                    <div className="sig-label">FIRMA DE QUIEN REGISTRA:</div>
+                    <div className="sig-line" style={{ minHeight: 28 }} />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
 
       </div>
     </>

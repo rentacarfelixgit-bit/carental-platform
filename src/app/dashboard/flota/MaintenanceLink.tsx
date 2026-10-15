@@ -15,7 +15,7 @@ export default function MaintenanceLink({ vehicleId, hasOpenAlerts }: Props) {
           : 'border-gray-200 text-gray-500 hover:bg-gray-50'
       }`}
     >
-      Mant.
+      Mantenimiento
     </Link>
   )
 }

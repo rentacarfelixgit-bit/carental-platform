@@ -1,9 +1,14 @@
 // src/app/dashboard/reservas/calendario/page.tsx
 // Calendario mensual — grid 7 columnas Dom→Sáb
+// Muestra las rentas activas y los eventos de agenda (retornos, equipo, cambios, notas).
 
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import DayAddMenu from './DayAddMenu'
+import EventChip from './EventChip'
+import { EVENT_TYPES, EVENT_TYPE_KEYS, EVENT_PEOPLE_SELECT, eventPeople, type CalendarEventRow, type CalendarEventType } from '@/lib/calendarEvents'
+import { rentalFolio } from '@/lib/rentalLabels'
 
 const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   pending:   { bg: 'bg-yellow-100', text: 'text-yellow-800', dot: 'bg-yellow-400' },
@@ -112,6 +117,43 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
     .gte('end_date',   firstDate)
     .order('start_date') as { data: Reservation[] | null }
 
+  // Eventos de agenda del mes
+  const { data: rawEvents } = await supabase
+    .from('calendar_events')
+    .select(`
+      id, type, title, notes, event_date, event_time, reservation_id, done, ${EVENT_PEOPLE_SELECT},
+      reservations ( number, origin, clients ( full_name ), vehicles ( brand, model, plates ) )
+    `)
+    .eq('tenant_id', profile.tenant_id)
+    .gte('event_date', firstDate)
+    .lte('event_date', lastDate)
+    .order('event_date')
+    .order('event_time', { ascending: true, nullsFirst: true })
+
+  const events: CalendarEventRow[] = (rawEvents ?? []).map(e => {
+    const r = e.reservations as unknown as {
+      number: number; origin: string
+      clients: { full_name: string } | null
+      vehicles: { brand: string; model: string; plates: string } | null
+    } | null
+    return {
+      id: e.id, type: e.type as CalendarEventType, title: e.title, notes: e.notes,
+      event_date: e.event_date, event_time: e.event_time, reservation_id: e.reservation_id, done: e.done,
+      ...eventPeople(e as unknown as Record<string, unknown>),
+      rental_label: r
+        ? [rentalFolio(r.origin, r.number), r.clients?.full_name, r.vehicles ? `${r.vehicles.brand} ${r.vehicles.model} ${r.vehicles.plates}` : null].filter(Boolean).join(' · ')
+        : null,
+    }
+  })
+
+  const eventsByDay: Record<number, CalendarEventRow[]> = {}
+  for (let d = 1; d <= totalDays; d++) eventsByDay[d] = []
+  for (const ev of events) {
+    const d = Number(ev.event_date.slice(8, 10))
+    if (eventsByDay[d]) eventsByDay[d].push(ev)
+  }
+  const pendingEvents = events.filter(e => !e.done).length
+
   // Map: day (1..31) → reservations active that day
   const byDay: Record<number, Reservation[]> = {}
   for (let d = 1; d <= totalDays; d++) byDay[d] = []
@@ -146,7 +188,9 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
             Reservas
           </Link>
           <h1 className="text-xl font-semibold text-gray-900 capitalize">{monthName}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{reservations?.length ?? 0} reservas activas</p>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {reservations?.length ?? 0} rentas activas · {pendingEvents} evento{pendingEvents !== 1 ? 's' : ''} pendiente{pendingEvents !== 1 ? 's' : ''}
+          </p>
         </div>
         <div className="flex items-center gap-1.5">
           <Link href={`?mes=${prevMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">←</Link>
@@ -163,12 +207,20 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
             {label}
           </span>
         ))}
+        <span className="w-px h-3 bg-gray-200 mx-1" />
+        {EVENT_TYPE_KEYS.map(k => (
+          <span key={k} className="flex items-center gap-1.5 text-xs text-gray-500">
+            <span className={`w-2 h-2 rounded-sm ${EVENT_TYPES[k].dot}`} />
+            {EVENT_TYPES[k].label}
+          </span>
+        ))}
       </div>
 
       {/* ── DESKTOP: Grid 7 columnas ────────────────────────────────── */}
-      <div className="hidden md:block bg-white border border-gray-200 rounded-xl overflow-hidden">
+      {/* Sin overflow-hidden: el menú "+" de los días de abajo no debe recortarse */}
+      <div className="hidden md:block bg-white border border-gray-200 rounded-xl">
         {/* Header días de semana */}
-        <div className="grid grid-cols-7 border-b border-gray-200 bg-gray-50">
+        <div className="grid grid-cols-7 border-b border-gray-200 bg-gray-50 rounded-t-xl">
           {DOW_LABELS.map((d) => (
             <div key={d} className={`py-2.5 text-center text-xs font-semibold uppercase tracking-wider ${d === 'Dom' || d === 'Sáb' ? 'text-gray-400' : 'text-gray-500'}`}>
               {d}
@@ -185,7 +237,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
 
             if (!cell) {
               return (
-                <div key={`blank-${i}`} className={`min-h-[130px] ${isLastRow ? '' : 'border-b border-gray-100'} ${isWeekend ? 'bg-gray-50/80' : 'bg-gray-50/30'}`} />
+                <div key={`blank-${i}`} className={`min-h-[130px] ${i === cells.length - 7 ? 'rounded-bl-xl' : ''} ${i === cells.length - 1 ? 'rounded-br-xl' : ''} ${isLastRow ? '' : 'border-b border-gray-100'} ${isWeekend ? 'bg-gray-50/80' : 'bg-gray-50/30'}`} />
               )
             }
 
@@ -193,29 +245,26 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
             const ds      = dayStr(year, month, day)
             const isToday = ds === today
             const rsvs    = byDay[day] ?? []
-            const MAX     = 3
-            const extra   = rsvs.length - MAX
+            const evs     = eventsByDay[day] ?? []
+            const MAX     = 4
+            // Primero los eventos (son pendientes por atender), luego las rentas
+            const evShown  = evs.slice(0, MAX)
+            const rsvShown = rsvs.slice(0, Math.max(0, MAX - evShown.length))
+            const extra    = evs.length + rsvs.length - evShown.length - rsvShown.length
 
             return (
-              <div key={`day-${day}`} className={`min-h-[130px] p-2 group relative ${isLastRow ? '' : 'border-b border-gray-100'} ${isToday ? 'bg-blue-50/50' : isWeekend ? 'bg-gray-50/50' : 'bg-white'} hover:bg-gray-50/80 transition-colors`}>
+              <div key={`day-${day}`} className={`min-h-[130px] p-2 group relative ${i === cells.length - 7 ? 'rounded-bl-xl' : ''} ${i === cells.length - 1 ? 'rounded-br-xl' : ''} ${isLastRow ? '' : 'border-b border-gray-100'} ${isToday ? 'bg-blue-50/50' : isWeekend ? 'bg-gray-50/50' : 'bg-white'} hover:bg-gray-50/80 transition-colors`}>
                 <div className="flex items-center justify-between mb-1.5">
-                  <Link
-                    href={`/dashboard/reservas/nueva?start=${ds}`}
-                    className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-semibold transition-colors ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
+                  <span
+                    className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-semibold ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700'}`}
                   >
                     {day}
-                  </Link>
-                  <Link
-                    href={`/dashboard/reservas/nueva?start=${ds}`}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 rounded-full bg-blue-100 hover:bg-blue-200 flex items-center justify-center"
-                  >
-                    <svg className="w-3 h-3 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                    </svg>
-                  </Link>
+                  </span>
+                  <DayAddMenu date={ds} />
                 </div>
                 <div className="space-y-0.5">
-                  {rsvs.slice(0, MAX).map((r) => {
+                  {evShown.map(ev => <EventChip key={ev.id} event={ev} />)}
+                  {rsvShown.map((r) => {
                     const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
                     return (
                       <Link key={r.id} href={`/dashboard/reservas/${r.id}`}
@@ -243,11 +292,12 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
           const dow     = new Date(`${ds}T12:00:00Z`).getUTCDay()
           const dowLabel = DOW_LABELS[dow]
           const rsvs    = byDay[day] ?? []
-          const hasRsvs = rsvs.length > 0
+          const evs     = eventsByDay[day] ?? []
+          const hasRsvs = rsvs.length > 0 || evs.length > 0
 
           return (
             <div key={day} className={`rounded-xl border ${isToday ? 'border-blue-200 bg-blue-50/40' : hasRsvs ? 'border-gray-200 bg-white' : 'border-transparent bg-transparent'}`}>
-              <div className={`flex items-center gap-3 px-3 py-2 ${!hasRsvs ? 'opacity-50' : ''}`}>
+              <div className="flex items-center gap-3 px-3 py-2">
                 {/* Número + día */}
                 <div className="flex-shrink-0 text-center w-10">
                   <p className="text-xs text-gray-400 uppercase">{dowLabel}</p>
@@ -260,6 +310,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                 <div className="flex-1 min-w-0">
                   {hasRsvs ? (
                     <div className="space-y-1">
+                      {evs.map(ev => <EventChip key={ev.id} event={ev} size="md" />)}
                       {rsvs.map((r) => {
                         const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
                         return (
@@ -274,20 +325,14 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                       })}
                     </div>
                   ) : (
-                    <Link href={`/dashboard/reservas/nueva?start=${ds}`} className="text-xs text-gray-400 hover:text-blue-500 transition-colors">
-                      Sin reservas · + agregar
-                    </Link>
+                    <p className="text-xs text-gray-400">Sin actividad</p>
                   )}
                 </div>
 
-                {/* Botón + en días con reservas */}
-                {hasRsvs && (
-                  <Link href={`/dashboard/reservas/nueva?start=${ds}`} className="flex-shrink-0 w-7 h-7 rounded-full border border-gray-200 hover:bg-blue-50 hover:border-blue-200 flex items-center justify-center transition-colors">
-                    <svg className="w-3.5 h-3.5 text-gray-400 hover:text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                    </svg>
-                  </Link>
-                )}
+                {/* Botón +: reserva, contrato o evento */}
+                <div className="flex-shrink-0">
+                  <DayAddMenu date={ds} variant="mobile" />
+                </div>
               </div>
             </div>
           )
@@ -295,7 +340,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
       </div>
 
       <p className="text-xs text-gray-400 mt-4 text-center hidden md:block">
-        Clic en el número del día para crear una reserva · Clic en una reserva para verla
+        Pasa el cursor sobre un día y usa + para crear una reserva, un contrato o un evento · Clic en un evento o renta para verlo
       </p>
     </div>
   )
