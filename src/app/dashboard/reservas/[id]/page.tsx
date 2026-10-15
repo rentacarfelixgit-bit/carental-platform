@@ -8,6 +8,8 @@ import StatusBadge from '../StatusBadge'
 import ReservationActions from './ReservationActions'
 import ContratoButton from './ContratoButton'
 import { rentalFolio, rentalSection, rentalTitle } from '@/lib/rentalLabels'
+import { BREAKDOWN_SELECT, resolveBreakdown, getReservationPrices } from '@/lib/reservationPrices'
+import { parseCalendarReturn, calendarHref } from '@/lib/calendarReturn'
 import RentalEvents from '../calendario/RentalEvents'
 import ChangeReturnDateButton from './ChangeReturnDateButton'
 import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
@@ -23,12 +25,14 @@ const EXTRA_LABELS: Record<string, string> = {
 
 interface Props {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ cambio?: string }>
+  searchParams: Promise<{ cambio?: string; from?: string; mes?: string; dia?: string }>
 }
 
 export default async function ReservaDetailPage({ params, searchParams }: Props) {
   const { id } = await params
-  const { cambio } = await searchParams
+  const sp = await searchParams
+  const { cambio } = sp
+  const fromCalendar = parseCalendarReturn(sp)
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -45,7 +49,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
   const isAdmin = profile.role === 'admin'
 
   const [
-    { data: reservation },
+    { data: reservationRaw, error: reservationError, missingColumns },
     { data: checkoutInspection },
     { data: checkinInspection },
     { data: rawEvents },
@@ -53,19 +57,28 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
     { data: rawEquipment },
     { data: rawCharges },
     { data: openSwap },
+    { data: tenantRow },
   ] = await Promise.all([
-    supabase
-      .from('reservations')
-      .select(`
+    (async () => {
+      const base = `
         id, number, origin, start_date, end_date, status, notes, internal_notes, created_at, confirmed_at,
         total_amount, daily_rate, cash_payment, card_payment, payment_method,
         clients ( id, full_name, id_number, phone, email, license_number, passport_number, address, city, state, zip_code, local_phone, local_address ),
         vehicles ( id, plates, brand, model, year, color ),
-        reservation_extras ( id, extra_type, description )
-      `)
-      .eq('id', id)
-      .eq('tenant_id', profile.tenant_id)
-      .single(),
+        reservation_extras ( id, extra_type, description )`
+      const contractCols = `${BREAKDOWN_SELECT},
+        folio, approval_number, prepared_by, driver_age, client_has_pets, insurance_deductible,
+        additional_driver_license, additional_driver_phone, additional_driver2_license, additional_driver2_phone`
+      const q = (cols: string) => supabase.from('reservations').select(cols)
+        .eq('id', id).eq('tenant_id', profile.tenant_id).single()
+      const full = await q(`${base}, ${contractCols}`)
+      // Si aún no se aplicó el script SQL (columna inexistente), abrir igual con las columnas de siempre
+      if (full.error && (full.error.code === '42703' || /does not exist/i.test(full.error.message))) {
+        const fallback = await q(base)
+        return { ...fallback, missingColumns: full.error.message }
+      }
+      return { ...full, missingColumns: null as string | null }
+    })(),
     supabase
       .from('inspections')
       .select('id')
@@ -117,9 +130,26 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
       .eq('tenant_id', profile.tenant_id)
       .eq('status', 'in_progress')
       .maybeSingle(),
+    supabase.from('tenants').select('settings').eq('id', profile.tenant_id).single(),
   ])
 
-  if (!reservation) redirect('/dashboard/reservas')
+  // Una columna que falta en la BD hace fallar la consulta: mostrarlo en lugar de redirigir en silencio
+  if (reservationError && reservationError.code !== 'PGRST116') {
+    return (
+      <div className="p-6 max-w-2xl mx-auto">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-sm text-red-800 space-y-2">
+          <p className="font-semibold">No se pudo cargar la renta.</p>
+          <p className="font-mono text-xs break-words">{reservationError.message}</p>
+          {/column .* does not exist/i.test(reservationError.message) && (
+            <p>Falta aplicar en Supabase (SQL Editor) el script <b>supabase_contrato_desglose_oct2026.sql</b> de la raíz del proyecto.</p>
+          )}
+        </div>
+      </div>
+    )
+  }
+  if (!reservationRaw) redirect('/dashboard/reservas')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reservation = reservationRaw as any
 
   const hasCheckout = !!checkoutInspection
   const hasCheckin  = !!checkinInspection
@@ -179,14 +209,37 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
+      {missingColumns && (
+        <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+          Falta aplicar en Supabase (SQL Editor) el script <b>supabase_contrato_desglose_oct2026.sql</b>.
+          Mientras tanto la renta se muestra, pero el contrato no guardará el desglose ni los datos del modal.
+          <span className="block mt-1 font-mono opacity-70 break-words">{missingColumns}</span>
+        </div>
+      )}
       {/* Encabezado */}
       <div className="mb-6">
-        <Link href={section.href} className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
-          </svg>
-          {section.label}
-        </Link>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-4">
+          {fromCalendar && (
+            <Link href={calendarHref(fromCalendar)} className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+              </svg>
+              Calendario
+              <span className="font-normal text-gray-500">
+                · {new Date(`${fromCalendar.mes}-${String(fromCalendar.dia ?? 1).padStart(2, '0')}T12:00:00`)
+                    .toLocaleDateString('es-MX', fromCalendar.dia ? { day: 'numeric', month: 'long', year: 'numeric' } : { month: 'long', year: 'numeric' })}
+              </span>
+            </Link>
+          )}
+          <Link href={section.href} className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700">
+            {!fromCalendar && (
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+              </svg>
+            )}
+            {fromCalendar ? `Ver todas las ${section.label.toLowerCase()}` : section.label}
+          </Link>
+        </div>
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-xl font-semibold text-gray-900">
@@ -262,6 +315,27 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
         )}
         <ContratoButton
           reservationId={reservation.id}
+          defaultPrices={getReservationPrices(tenantRow?.settings)}
+          contract={(() => {
+            const pr = resolveBreakdown(reservation)
+            return {
+              days:              pr.days,
+              total_amount:      reservation.total_amount != null ? Number(reservation.total_amount) : null,
+              breakdown:         pr.breakdown,
+              hasSavedBreakdown: pr.hasSavedBreakdown,
+              payment_method:    reservation.payment_method,
+              folio:             reservation.folio,
+              approval_number:   reservation.approval_number,
+              prepared_by:       reservation.prepared_by,
+              d1_lic:            reservation.additional_driver_license,
+              d1_tel:            reservation.additional_driver_phone,
+              d2_lic:            reservation.additional_driver2_license,
+              d2_tel:            reservation.additional_driver2_phone,
+              driver_age:        reservation.driver_age,
+              pets:              !!reservation.client_has_pets,
+              deductible:        reservation.insurance_deductible != null ? Number(reservation.insurance_deductible) : null,
+            }
+          })()}
           client={client ? {
             id:              client.id,
             full_name:       client.full_name,

@@ -40,3 +40,5 @@ button.text-sm.bg-gray-900
 input, select, textarea {
   color: black!important;
 }
+/* Aparición suave del bloqueo de carga (evita parpadeo en cargas muy rápidas) */
+@keyframes rf-fade-in { from { opacity: 0 } to { opacity: 1 } }

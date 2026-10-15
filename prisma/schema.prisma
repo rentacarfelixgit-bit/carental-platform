@@ -443,6 +443,9 @@ model Reservation {
   approvalNumber  String?        @map("approval_number")  // Número de aprobación
   cashPayment     Decimal?       @map("cash_payment")     @db.Decimal(10, 2) // Abono en efectivo
   cardPayment     Decimal?       @map("card_payment")     @db.Decimal(10, 2) // Abono en tarjeta
+  preparedBy      String?        @map("prepared_by")                         // Agente que preparó el contrato
+  /// Desglose exacto de la reserva: seguros, extras, impuestos y "Otros" (ver src/lib/reservationPrices.ts)
+  priceBreakdown  Json?          @map("price_breakdown")
 
   // ── Seguros (cada uno: precio + decisión del cliente) ───────────────────
   // CDW = Collision Damage Waiver
@@ -457,6 +460,7 @@ model Reservation {
   // AT = Anti-Theft
   insuranceAtAccepted   Boolean?  @map("insurance_at_accepted")
   insuranceAtPrice      Decimal?  @map("insurance_at_price")      @db.Decimal(10, 2)
+  insuranceDeductible   Decimal?  @map("insurance_deductible")    @db.Decimal(10, 2) // Deducible del seguro
 
   // ── Conductor adicional 1 ────────────────────────────────────────────────
   additionalDriverName    String?  @map("additional_driver_name")

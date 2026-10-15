@@ -10,13 +10,15 @@ import StatusBadge from '../reservas/StatusBadge'
 import {
   CONTRACT_STATUS, OPEN_CONTRACT_STATUSES, CLOSED_CONTRACT_STATUSES, rentalFolio,
 } from '@/lib/rentalLabels'
+import { parseSort, sortOrders, applySortParams, RENTAL_SORT_KEYS, RENTAL_SORT_COLUMNS, type SortState } from '@/lib/tableSort'
+import { SortLinkTh } from '@/components/dashboard/SortableTh'
 
 const PAGE_SIZE = 20
 
 type Tab = 'abiertos' | 'cerrados'
 
 interface Props {
-  searchParams: Promise<{ tab?: string; status?: string; page?: string }>
+  searchParams: Promise<{ tab?: string; status?: string; page?: string; orden?: string; dir?: string }>
 }
 
 export default async function ContratosPage({ searchParams }: Props) {
@@ -25,6 +27,7 @@ export default async function ContratosPage({ searchParams }: Props) {
   const tabStatuses: readonly string[] = tab === 'abiertos' ? OPEN_CONTRACT_STATUSES : CLOSED_CONTRACT_STATUSES
   const status = sp.status && tabStatuses.includes(sp.status) ? sp.status : ''
   const page = Math.max(1, Number(sp.page) || 1)
+  const sort = parseSort(sp.orden, sp.dir, RENTAL_SORT_KEYS)
   const from = (page - 1) * PAGE_SIZE
   const to   = from + PAGE_SIZE - 1
 
@@ -42,7 +45,7 @@ export default async function ContratosPage({ searchParams }: Props) {
     .eq('tenant_id', profile.tenant_id)
     .eq('origin', 'walk_in')
 
-  const query = supabase
+  let query = supabase
     .from('reservations')
     .select(`
       id, number, origin, start_date, end_date, status, created_at, total_amount,
@@ -52,8 +55,12 @@ export default async function ContratosPage({ searchParams }: Props) {
     .eq('tenant_id', profile.tenant_id)
     .eq('origin', 'walk_in')
     .in('status', status ? [status] : [...tabStatuses])
-    .order(tab === 'abiertos' ? 'start_date' : 'end_date', { ascending: tab === 'abiertos' })
     .range(from, to)
+  // Sin orden elegido: abiertos por fecha de salida (próximos primero), cerrados por regreso (recientes primero)
+  const defaultOrder: [string, boolean] = tab === 'abiertos' ? ['start_date', true] : ['end_date', false]
+  for (const o of sortOrders(sort, RENTAL_SORT_COLUMNS, [defaultOrder, ['created_at', false]])) {
+    query = query.order(o.column, { ascending: o.ascending, nullsFirst: false })
+  }
 
   const [{ data: contracts, count }, { count: openCount }, { count: closedCount }] = await Promise.all([
     query,
@@ -65,8 +72,8 @@ export default async function ContratosPage({ searchParams }: Props) {
   const total      = count ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  function url(params: { tab?: Tab; status?: string; page?: number }) {
-    const p = new URLSearchParams()
+  function url(params: { tab?: Tab; status?: string; page?: number; sort?: SortState | null }) {
+    const p = applySortParams(new URLSearchParams(), params.sort !== undefined ? params.sort : sort)
     const t = params.tab ?? tab
     if (t !== 'abiertos') p.set('tab', t)
     const s = params.status ?? ''
@@ -75,6 +82,7 @@ export default async function ContratosPage({ searchParams }: Props) {
     const str = p.toString()
     return `/dashboard/contratos${str ? `?${str}` : ''}`
   }
+  const sortHref = (next: SortState | null) => url({ status, sort: next })
 
   const tabs: { id: Tab; label: string; count: number }[] = [
     { id: 'abiertos', label: 'Abiertos', count: openCount ?? 0 },
@@ -82,16 +90,16 @@ export default async function ContratosPage({ searchParams }: Props) {
   ]
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-4 md:p-6 max-w-6xl mx-auto">
       {/* Encabezado */}
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Contratos</h1>
           <p className="text-sm text-gray-500 mt-0.5">Rentas de clientes que llegan a mostrador sin reserva</p>
         </div>
         <Link
           href="/dashboard/contratos/nuevo"
-          className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          className="inline-flex items-center justify-center gap-2 self-start sm:self-auto bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -152,14 +160,15 @@ export default async function ContratosPage({ searchParams }: Props) {
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         {contracts && contracts.length > 0 ? (
           <>
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">No.</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Cliente</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Vehículo</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Fechas</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
+                  <SortLinkTh label="No." sortKey="folio" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Cliente" sortKey="cliente" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Vehículo" sortKey="vehiculo" sort={sort} href={sortHref} className="hidden sm:table-cell" />
+                  <SortLinkTh label="Fechas" sortKey="fechas" sort={sort} href={sortHref} className="hidden md:table-cell" />
+                  <SortLinkTh label="Estado" sortKey="estado" sort={sort} href={sortHref} />
                   <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Acciones</th>
                 </tr>
               </thead>
@@ -174,6 +183,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                       <td className="px-4 py-3">
                         <p className="font-medium text-gray-900">{client?.full_name ?? '—'}</p>
                         <p className="text-xs text-gray-400">{client?.id_number}</p>
+                        <p className="sm:hidden text-xs text-gray-500 mt-0.5">{vehicle?.brand} {vehicle?.model} · <span className="font-mono">{vehicle?.plates}</span></p>
                       </td>
                       <td className="px-4 py-3 hidden sm:table-cell">
                         <p className="text-gray-700">{vehicle?.brand} {vehicle?.model}</p>
@@ -197,6 +207,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                 })}
               </tbody>
             </table>
+            </div>
 
             {totalPages > 1 && (
               <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50/50">

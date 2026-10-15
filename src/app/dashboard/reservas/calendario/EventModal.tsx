@@ -4,7 +4,8 @@
 // Crear / ver / editar un evento de agenda. Se abre desde el "+" del día o al tocar un evento.
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
+import { calendarFromQuery } from '@/lib/calendarReturn'
 import Link from 'next/link'
 import {
   EVENT_TYPES, EVENT_TYPE_KEYS, type CalendarEventRow, type CalendarEventType,
@@ -33,6 +34,7 @@ function Icon({ d, className }: { d: string; className?: string }) {
 
 export default function EventModal({ event, defaultDate, defaultReservation = null, onClose }: Props) {
   const router = useRouter()
+  const pathname = usePathname()
   const isNew = !event
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState('')
@@ -204,7 +206,12 @@ export default function EventModal({ event, defaultDate, defaultReservation = nu
               {rentalOptions.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
             </select>
             {reservationId && (
-              <Link href={`/dashboard/reservas/${reservationId}`} className="inline-block mt-1 text-xs text-blue-600 hover:underline">
+              <Link
+                href={pathname === '/dashboard/reservas/calendario'
+                  ? `/dashboard/reservas/${reservationId}?${calendarFromQuery(date.slice(0, 7), Number(date.slice(8, 10)))}`
+                  : `/dashboard/reservas/${reservationId}`}
+                className="inline-block mt-1 text-xs text-blue-600 hover:underline"
+              >
                 Ver renta →
               </Link>
             )}

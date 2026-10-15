@@ -7,16 +7,19 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import StatusBadge, { STATUS_CONFIG } from './StatusBadge'
 import { rentalFolio } from '@/lib/rentalLabels'
+import { parseSort, sortOrders, applySortParams, RENTAL_SORT_KEYS, RENTAL_SORT_COLUMNS, type SortState } from '@/lib/tableSort'
+import { SortLinkTh } from '@/components/dashboard/SortableTh'
 
 const PAGE_SIZE = 20
 const ALL_STATUSES = Object.entries(STATUS_CONFIG).map(([value, { label }]) => ({ value, label }))
 
 interface Props {
-  searchParams: Promise<{ status?: string; page?: string }>
+  searchParams: Promise<{ status?: string; page?: string; orden?: string; dir?: string }>
 }
 
 export default async function ReservasPage({ searchParams }: Props) {
-  const { status = '', page: pageParam = '1' } = await searchParams
+  const { status = '', page: pageParam = '1', orden, dir } = await searchParams
+  const sort = parseSort(orden, dir, RENTAL_SORT_KEYS)
   const page = Math.max(1, Number(pageParam) || 1)
   const from = (page - 1) * PAGE_SIZE
   const to   = from + PAGE_SIZE - 1
@@ -42,8 +45,10 @@ export default async function ReservasPage({ searchParams }: Props) {
     `, { count: 'exact' })
     .eq('tenant_id', profile.tenant_id)
     .eq('origin', 'reservation')
-    .order('created_at', { ascending: false })
     .range(from, to)
+  for (const o of sortOrders(sort, RENTAL_SORT_COLUMNS, [['created_at', false]])) {
+    query = query.order(o.column, { ascending: o.ascending, nullsFirst: false })
+  }
 
   if (status) query = query.eq('status', status)
 
@@ -52,13 +57,14 @@ export default async function ReservasPage({ searchParams }: Props) {
   const total      = count ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  function pageUrl(p: number, s = status) {
-    const params = new URLSearchParams()
+  function pageUrl(p: number, s = status, so: SortState | null = sort) {
+    const params = applySortParams(new URLSearchParams(), so)
     if (s) params.set('status', s)
     if (p > 1) params.set('page', String(p))
     const str = params.toString()
     return `/dashboard/reservas${str ? `?${str}` : ''}`
   }
+  const sortHref = (next: SortState | null) => pageUrl(1, status, next)
 
   return (
     <div className="p-6 max-w-6xl mx-auto">
@@ -125,11 +131,11 @@ export default async function ReservasPage({ searchParams }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">No.</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Cliente</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Vehículo</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Fechas</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
+                  <SortLinkTh label="No." sortKey="folio" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Cliente" sortKey="cliente" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Vehículo" sortKey="vehiculo" sort={sort} href={sortHref} className="hidden sm:table-cell" />
+                  <SortLinkTh label="Fechas" sortKey="fechas" sort={sort} href={sortHref} className="hidden md:table-cell" />
+                  <SortLinkTh label="Estado" sortKey="estado" sort={sort} href={sortHref} />
                   <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Acciones</th>
                 </tr>
               </thead>

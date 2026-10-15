@@ -191,19 +191,19 @@ export default function Sidebar({ userEmail, userName, userRole }: SidebarProps)
   )
 
   const LogoHeader = () => (
-    <div className="flex flex-col items-center justify-center px-4 py-4 border-b border-white/10">
+    <div className="flex items-center justify-center px-4 py-4 border-b border-white/10">
       <Image
-        src="/logos/Felix_Castillo_CR_Logo.png"
+        src="/logos/felix-castillo-logo-blanco.png"
         alt="Felix Castillo Car Rental"
-        width={160}
+        width={120}
         height={60}
         className="object-contain"
         priority
       />
       <Image
-        src="/logos/savings_logo-1.png"
+        src="/logos/savings-logo-blanco.png"
         alt="Savings"
-        width={130}
+        width={100}
         height={40}
         className="object-contain mt-1"
         priority
@@ -216,7 +216,7 @@ export default function Sidebar({ userEmail, userName, userRole }: SidebarProps)
       {/* ── Topbar móvil ──────────────────────────────────────────── */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-30 flex items-center justify-between h-14 px-4 border-b border-white/10 bg-gray-900 shadow-sm">
         <Image
-          src="/logos/Felix_Castillo_CR_Logo.png"
+          src="/logos/felix-castillo-logo-blanco.png"
           alt="Felix Castillo Car Rental"
           width={100}
           height={36}

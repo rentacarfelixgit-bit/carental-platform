@@ -7,10 +7,10 @@ import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { createReservation, getAvailableVehicles, searchClients } from '../actions'
 import BlacklistWarning from '@/components/dashboard/BlacklistWarning'
 import Link from 'next/link'
+import { calendarHref, type CalendarReturn } from '@/lib/calendarReturn'
 import {
   INSURANCE_ITEMS, EXTRA_ITEMS, TAX_ITEMS, ALL_PRICE_ITEMS,
-  type PriceItem, type ReservationPrices,
-} from '@/lib/reservationPrices'
+  type PriceItem, type ReservationPrices, computeBreakdown } from '@/lib/reservationPrices'
 
 interface Client {
   id: string; full_name: string; id_number: string
@@ -36,6 +36,8 @@ interface Props {
    * El formulario y el flujo son los mismos; solo cambian textos y el origen guardado.
    */
   mode?: 'reservation' | 'contract'
+  /** Si se abrió desde el calendario: a dónde regresar al cancelar o al guardar */
+  calendarReturn?: CalendarReturn | null
 }
 
 // ── Seguros, extras e impuestos que van en el sidebar (catálogo en @/lib/reservationPrices) ──
@@ -98,10 +100,11 @@ export default function NuevaReservaForm({
   initialVehicleId = '',
   defaultPrices,
   mode = 'reservation',
+  calendarReturn = null,
 }: Props) {
   const isContract = mode === 'contract'
-  const sectionHref  = isContract ? '/dashboard/contratos' : '/dashboard/reservas'
-  const sectionLabel = isContract ? 'Contratos' : 'Reservas'
+  const sectionHref  = calendarReturn ? calendarHref(calendarReturn) : isContract ? '/dashboard/contratos' : '/dashboard/reservas'
+  const sectionLabel = calendarReturn ? 'Calendario' : isContract ? 'Contratos' : 'Reservas'
   const [state, action, pending] = useActionState(createReservation, {})
 
   // ── Clientes ──────────────────────────────────────────────────────────────
@@ -275,25 +278,20 @@ export default function NuevaReservaForm({
     : ''
 
   // ── Cálculo resumen ───────────────────────────────────────────────────────
+  // Mismo cálculo que "Preparar contrato" y el servidor (@/lib/reservationPrices → computeBreakdown).
+  // El desglose se guarda en la reserva para que el contrato muestre exactamente lo mismo.
   const rate = parseFloat(dailyRate) || 0
-  const rentalSubtotal = rate * rentalDays
-
-  const insuranceTotal = INSURANCES.reduce((sum, ins) =>
-    insChecked[ins.key] ? sum + priceOf(ins.key) * rentalDays : sum, 0)
-
-  const extrasTotal = EXTRAS_FIXED.reduce((sum, e) =>
-    extrasChecked[e.key] ? sum + priceOf(e.key) : sum, 0)
-
-  const otrosTotal = otrosChecked ? (parseFloat(otrosPrice || '0') || 0) : 0
-
-  // Base para impuestos porcentuales: renta + seguros (igual que antes)
-  const taxAmount = (t: PriceItem) =>
-    t.kind === 'pct' ? (rentalSubtotal + insuranceTotal) * (priceOf(t.key) / 100) : priceOf(t.key)
-
-  const taxesTotal = TAXES_FIXED.reduce((sum, t) =>
-    taxesChecked[t.key] ? sum + taxAmount(t) : sum, 0)
-
-  const grandTotal = rentalSubtotal + insuranceTotal + extrasTotal + otrosTotal + taxesTotal
+  const breakdown = computeBreakdown({
+    days: rentalDays,
+    dailyRate: rate,
+    checked: { ...insChecked, ...extrasChecked, ...taxesChecked },
+    prices: Object.fromEntries(ALL_PRICE_ITEMS.map(i => [i.key, priceOf(i.key)])),
+    otros: { label: otrosLabel, price: parseFloat(otrosPrice || '0') || 0, checked: otrosChecked },
+  })
+  const rentalSubtotal = breakdown.rental_subtotal
+  const otrosTotal = breakdown.lines.find(l => l.key === 'otros')?.amount ?? 0
+  const taxAmount = (t: PriceItem) => breakdown.lines.find(l => l.key === t.key)?.amount ?? 0
+  const grandTotal = breakdown.total
 
   // ¿El usuario modificó datos del cliente seleccionado? (se guardarán al crear la reserva)
   const clientDirty = useMemo(() => {
@@ -326,8 +324,8 @@ export default function NuevaReservaForm({
   }
 
   // ── Clases helper ─────────────────────────────────────────────────────────
-  const inputCls = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50 placeholder:text-gray-400'
-  const roInputCls = 'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-800'
+  const inputCls = 'w-full min-w-0 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white disabled:opacity-50 placeholder:text-gray-400'
+  const roInputCls = 'w-full min-w-0 px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-800'
 
   return (
     <div className="p-4 md:p-6 max-w-[1400px] mx-auto">
@@ -352,9 +350,18 @@ export default function NuevaReservaForm({
         {/* Inputs ocultos */}
         <input type="hidden" name="client_id"    value={selectedClient?.id ?? ''} />
         <input type="hidden" name="origin"       value={isContract ? 'walk_in' : 'reservation'} />
+        {calendarReturn && (
+          <>
+            <input type="hidden" name="cal_from"  value="calendario" />
+            <input type="hidden" name="cal_mes"   value={calendarReturn.mes} />
+            <input type="hidden" name="cal_dia"   value={calendarReturn.dia ?? ''} />
+            <input type="hidden" name="cal_vista" value={calendarReturn.vista} />
+          </>
+        )}
         <input type="hidden" name="total_amount" value={grandTotal > 0 ? grandTotal.toFixed(2) : ''} />
         <input type="hidden" name="payment_method" value={paymentMethod} />
         <input type="hidden" name="daily_rate"     value={dailyRate} />
+        <input type="hidden" name="price_breakdown" value={rentalDays > 0 ? JSON.stringify(breakdown) : ''} />
         {/* Abonos: solo se mandan si su método de pago está activado */}
         <input type="hidden" name="cash_payment" value={payEfectivo ? abonoEfectivo : ''} />
         <input type="hidden" name="card_payment" value={payTarjeta ? abonoTarjeta : ''} />
@@ -381,14 +388,16 @@ export default function NuevaReservaForm({
           </div>
         )}
 
-        {/* ══ LAYOUT PRINCIPAL: main (flex-1) + sidebar (280px) ═══════════ */}
-        <div className="flex gap-5 items-start">
+        {/* ══ LAYOUT PRINCIPAL ═══════════════════════════════════════════════
+            Móvil/tablet: formulario → precios y resumen → botones (barra fija abajo).
+            Escritorio (xl): formulario + botones a la izquierda, panel fijo a la derecha. */}
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_16rem] gap-4 xl:gap-5 items-start">
 
           {/* ═══ COLUMNA PRINCIPAL ══════════════════════════════════════════ */}
-          <div className="flex-1 min-w-0 space-y-4">
+          <div className="@container min-w-0 space-y-4 xl:col-start-1 xl:row-start-1">
 
             {/* ── Datos del Cliente ──────────────────────────────────────── */}
-            <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-sm font-semibold text-gray-800">Datos del Cliente</h2>
               </div>
@@ -456,7 +465,7 @@ export default function NuevaReservaForm({
               </div>
 
               {/* Grid 2 columnas: campos del cliente */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+              <div className="grid grid-cols-1 @xl:grid-cols-2 gap-x-6 gap-y-3">
 
                 {/* Izquierda */}
                 <div className="space-y-3">
@@ -494,7 +503,7 @@ export default function NuevaReservaForm({
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Licencia de Conducir <span className="text-red-500">*</span></label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 @xl:grid-cols-1 @3xl:grid-cols-2 gap-2 items-end">
                       <input type="text" name="client_license_number" value={cLic} onChange={e => setCLic(clean.doc(e.target.value, 30))} maxLength={30}
                         placeholder="—" className={`${inputCls} uppercase`} />
                       <div>
@@ -506,7 +515,7 @@ export default function NuevaReservaForm({
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Pasaporte o Identificación</label>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 min-[420px]:grid-cols-2 @xl:grid-cols-1 @3xl:grid-cols-2 gap-2 items-end">
                       <input type="text" name="client_passport_number" value={cPass} onChange={e => setCPass(clean.doc(e.target.value, 30))} maxLength={30}
                         placeholder="—" className={`${inputCls} uppercase`} />
                       <div>
@@ -521,16 +530,16 @@ export default function NuevaReservaForm({
               {/* Dirección: fila completa debajo de las dos columnas */}
               <div className="mt-3">
                 <label className="block text-xs font-medium text-gray-600 mb-1">Dirección</label>
-                <div className="grid grid-cols-2 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_7rem] gap-2">
+                <div className="grid grid-cols-2 @2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_7rem] gap-2">
                   <input type="text" name="client_address" value={cAddr} onChange={e => setCAddr(e.target.value.slice(0, 200))} maxLength={200}
-                    placeholder="Calle, número, sector" className={`col-span-2 md:col-span-1 ${inputCls}`} />
+                    placeholder="Calle, número, sector" className={`col-span-2 @2xl:col-span-1 ${inputCls}`} />
                   <input type="text" name="client_city" value={cCity} onChange={e => setCCity(clean.name(e.target.value, 100))} maxLength={100}
                     placeholder="Ciudad" className={inputCls} />
                   <input type="text" name="client_state" value={cState} onChange={e => setCState(clean.name(e.target.value, 100))} maxLength={100}
                     placeholder="Estado / Provincia" className={inputCls} />
                   <input type="text" name="client_zip_code" value={cZip} onChange={e => setCZip(clean.digits(e.target.value, 10))}
                     inputMode="numeric" pattern="[0-9]*" maxLength={10}
-                    placeholder="Zip" className={`col-span-2 md:col-span-1 ${inputCls}`} />
+                    placeholder="Zip" className={`col-span-2 @2xl:col-span-1 ${inputCls}`} />
                 </div>
               </div>
               {!selectedClient && cName.trim() && (
@@ -546,10 +555,10 @@ export default function NuevaReservaForm({
             </div>
 
             {/* ── Datos del Vehículo + Datos de la Renta ─────────────────── */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 @2xl:grid-cols-2 gap-4">
 
               {/* Vehículo */}
-              <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+              <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-5 space-y-3">
                 <h2 className="text-sm font-semibold text-gray-800">Datos del Vehículo</h2>
                 {!startDate || !endDate ? (
                   <p className="text-xs text-gray-400">Completa las fechas para ver vehículos disponibles.</p>
@@ -602,7 +611,7 @@ export default function NuevaReservaForm({
               </div>
 
               {/* Renta */}
-              <div className="bg-white border border-gray-200 rounded-xl p-5 space-y-3">
+              <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-5 space-y-3">
                 <h2 className="text-sm font-semibold text-gray-800">Datos de la Renta</h2>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de Salida <span className="text-red-500">*</span></label>
@@ -651,22 +660,22 @@ export default function NuevaReservaForm({
             </div>
 
             {/* ── Observaciones | Notas Internas | Método de Pago ────────── */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <div className="grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-4">
+              <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-5">
                 <label className="block text-sm font-semibold text-gray-800 mb-2">Observaciones</label>
                 <textarea name="notes" rows={4} disabled={pending}
                   value={observaciones} onChange={e => setObservaciones(e.target.value)}
                   placeholder="Observaciones del contrato..."
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400 disabled:opacity-50" />
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-5">
                 <label className="block text-sm font-semibold text-gray-800 mb-2">Notas Internas</label>
                 <textarea name="internal_notes" rows={4} disabled={pending}
                   value={internalNotes} onChange={e => setInternalNotes(e.target.value)}
                   placeholder="Instrucciones internas (uso interno)..."
                   className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400 disabled:opacity-50" />
               </div>
-              <div className="bg-white border border-gray-200 rounded-xl p-5">
+              <div className="bg-white border border-gray-200 rounded-xl p-4 sm:p-5 @xl:col-span-2 @4xl:col-span-1">
                 <h2 className="text-sm font-semibold text-gray-800 mb-3">Método de Pago</h2>
                 <div className="space-y-3">
                   <Toggle label="Pagos en Efectivo"        checked={payEfectivo} onChange={setPayEfectivo} />
@@ -685,8 +694,17 @@ export default function NuevaReservaForm({
               </div>
             </div>
 
-            {/* ── Botones ─────────────────────────────────────────────────── */}
-            <div className="flex gap-3 pb-4">
+          </div>{/* fin columna principal */}
+
+          {/* ── Botones ───────────────────────────────────────────────────── */}
+          <div className="sticky bottom-0 z-20 -mx-4 md:-mx-6 xl:mx-0 px-4 md:px-6 xl:px-0 py-3 xl:py-0 xl:pb-4 bg-white/95 xl:bg-transparent backdrop-blur border-t border-gray-200 xl:border-0 xl:static xl:col-start-1 xl:row-start-2">
+            {grandTotal > 0 && (
+              <div className="xl:hidden flex items-center justify-between text-sm mb-2">
+                <span className="text-gray-600">Total</span>
+                <span className="font-bold text-blue-700">RD${grandTotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</span>
+              </div>
+            )}
+            <div className="flex gap-3">
               <Link href={sectionHref}
                 className="flex-1 text-center py-2.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
                 Cancelar
@@ -707,10 +725,10 @@ export default function NuevaReservaForm({
                 ) : isContract ? 'Abrir contrato' : 'Crear reserva'}
               </button>
             </div>
-          </div>{/* fin columna principal */}
+          </div>{/* fin botones */}
 
           {/* ═══ SIDEBAR ════════════════════════════════════════════════════ */}
-          <div className="w-64 flex-shrink-0 space-y-4 sticky top-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-4 items-start xl:sticky xl:top-4 xl:col-start-2 xl:row-start-1 xl:row-span-2">
 
             {/* Seguros, Impuestos y Extras */}
             <div className="bg-white border border-gray-200 rounded-xl p-4">

@@ -8,9 +8,11 @@ import { useRef } from 'react'
 
 interface Props {
   defaultValue?: string
+  /** Orden actual de la tabla, para conservarlo al buscar */
+  sort?: { key: string; dir: string } | null
 }
 
-export default function ClientesSearch({ defaultValue = '' }: Props) {
+export default function ClientesSearch({ defaultValue = '', sort = null }: Props) {
   const btnRef = useRef<HTMLButtonElement>(null)
 
   function handleSubmit() {
@@ -22,6 +24,8 @@ export default function ClientesSearch({ defaultValue = '' }: Props) {
 
   return (
     <form method="GET" className="flex gap-3 mb-5" onSubmit={handleSubmit}>
+      {sort && <input type="hidden" name="orden" value={sort.key} />}
+      {sort && <input type="hidden" name="dir" value={sort.dir} />}
       <input
         name="q"
         defaultValue={defaultValue}

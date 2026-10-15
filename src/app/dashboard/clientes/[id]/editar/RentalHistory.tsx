@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { rentalFolio, statusStyle } from '@/lib/rentalLabels'
+import { sortRows, RENTAL_STATUS_RANK } from '@/lib/tableSort'
+import { useTableSort } from '@/lib/useTableSort'
+import { SortButtonTh } from '@/components/dashboard/SortableTh'
 
 interface Reservation {
   id: string
@@ -19,6 +22,7 @@ interface Reservation {
 export default function RentalHistory({ clientId }: { clientId: string }) {
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [loading, setLoading] = useState(true)
+  const { sort, onSort } = useTableSort<'folio' | 'vehiculo' | 'periodo' | 'estado'>()
 
   useEffect(() => {
     const supabase = createClient()
@@ -53,6 +57,13 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
     )
   }
 
+  const rows = sortRows(reservations, sort, {
+    folio:    r => `${r.origin === 'walk_in' ? 'C' : 'R'}${String(r.number ?? 0).padStart(8, '0')}`,
+    vehiculo: r => r.vehicles ? `${r.vehicles.brand} ${r.vehicles.model}` : null,
+    periodo:  r => r.start_date,
+    estado:   r => RENTAL_STATUS_RANK[r.status] ?? 99,
+  })
+
   const nights = (r: Reservation) => Math.max(1, Math.ceil(
     (new Date(r.end_date).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
   ))
@@ -74,15 +85,15 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">No.</th>
-              <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Vehículo</th>
-              <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Período</th>
-              <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
+              <SortButtonTh label="No." sortKey="folio" sort={sort} onSort={onSort} />
+              <SortButtonTh label="Vehículo" sortKey="vehiculo" sort={sort} onSort={onSort} />
+              <SortButtonTh label="Período" sortKey="periodo" sort={sort} onSort={onSort} className="hidden sm:table-cell" />
+              <SortButtonTh label="Estado" sortKey="estado" sort={sort} onSort={onSort} />
               <th className="text-right text-xs font-medium text-gray-500 px-4 py-3"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {reservations.map(r => {
+            {rows.map(r => {
               const v = r.vehicles
               const cfg = statusStyle(r.status, r.origin)
               return (

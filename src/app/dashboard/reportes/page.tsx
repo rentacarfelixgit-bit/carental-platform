@@ -5,6 +5,20 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { CONTRACT_STATUS, rentalFolio, statusStyle } from '@/lib/rentalLabels'
+import {
+  parseSort, sortOrders, sortRows, RENTAL_SORT_KEYS, RENTAL_SORT_COLUMNS, type SortState,
+} from '@/lib/tableSort'
+import { SortLinkTh } from '@/components/dashboard/SortableTh'
+
+// Cada tabla de la página tiene su propio orden en la URL
+const FLEET_SORT_KEYS = ['vehiculo', 'placas', 'reservas', 'dias'] as const
+const ALERT_SORT_KEYS = ['vehiculo', 'tipo', 'vencimiento'] as const
+const SORT_PARAMS = {
+  periodo: { key: 'orden',         dir: 'dir' },
+  flota:   { key: 'orden_flota',   dir: 'dir_flota' },
+  alertas: { key: 'orden_alertas', dir: 'dir_alertas' },
+} as const
+type SortTable = keyof typeof SORT_PARAMS
 
 const STATUS_VEHICLE_LABELS: Record<string, string> = {
   available:   'Disponibles',
@@ -44,12 +58,18 @@ function defaultRange() {
 const FLEET_PAGE_SIZE = 10
 
 interface Props {
-  searchParams: Promise<{ desde?: string; hasta?: string; pagina_flota?: string; tipo?: string }>
+  searchParams: Promise<Record<string, string | undefined>>
 }
 
 export default async function ReportesPage({ searchParams }: Props) {
   const defaults = defaultRange()
-  const { desde = defaults.start, hasta = defaults.end, pagina_flota, tipo: tipoParam } = await searchParams
+  const sp = await searchParams
+  const { desde = defaults.start, hasta = defaults.end, pagina_flota, tipo: tipoParam } = sp
+  const sorts = {
+    periodo: parseSort(sp.orden, sp.dir, RENTAL_SORT_KEYS),
+    flota:   parseSort(sp.orden_flota, sp.dir_flota, FLEET_SORT_KEYS),
+    alertas: parseSort(sp.orden_alertas, sp.dir_alertas, ALERT_SORT_KEYS),
+  }
   // Filtro de la tabla del período: todas | reservas | contratos
   const tipo = tipoParam === 'reservas' || tipoParam === 'contratos' ? tipoParam : 'todas'
   const pageFlota = Math.max(1, parseInt(pagina_flota ?? '1', 10) || 1)
@@ -107,8 +127,10 @@ export default async function ReportesPage({ searchParams }: Props) {
         .eq('tenant_id', tid)
         .gte('start_date', `${desde}T00:00:00`)
         .lte('start_date', `${hasta}T23:59:59`)
-        .order('start_date', { ascending: false })
         .limit(50)
+      for (const o of sortOrders(sorts.periodo, RENTAL_SORT_COLUMNS, [['start_date', false]])) {
+        q = q.order(o.column, { ascending: o.ascending, nullsFirst: false })
+      }
       if (tipo === 'reservas')  q = q.eq('origin', 'reservation')
       if (tipo === 'contratos') q = q.eq('origin', 'walk_in')
       return q
@@ -158,7 +180,7 @@ export default async function ReportesPage({ searchParams }: Props) {
     id: string; brand: string; model: string; plates: string; year: number
     reservations: { id: string; start_date: string; end_date: string; status: string }[]
   }
-  const utilization = (fleetUtilization as VehicleRow[] ?? []).map(v => {
+  const utilizationRaw = (fleetUtilization as VehicleRow[] ?? []).map(v => {
     const completedReservations = v.reservations.filter(r => r.status !== 'cancelled')
     const totalDays = completedReservations.reduce((sum, r) => {
       const days = Math.ceil(
@@ -171,7 +193,15 @@ export default async function ReportesPage({ searchParams }: Props) {
       totalReservations: completedReservations.length,
       totalDays,
     }
-  }).sort((a, b) => b.totalDays - a.totalDays)
+  })
+  const utilization = sorts.flota
+    ? sortRows(utilizationRaw, sorts.flota, {
+        vehiculo: v => `${v.brand} ${v.model} ${v.year}`,
+        placas:   v => v.plates,
+        reservas: v => v.totalReservations,
+        dias:     v => v.totalDays,
+      })
+    : [...utilizationRaw].sort((a, b) => b.totalDays - a.totalDays)
 
   const totalFleetPages = Math.max(1, Math.ceil(utilization.length / FLEET_PAGE_SIZE))
   const safePageFlota   = Math.min(pageFlota, totalFleetPages)
@@ -181,11 +211,29 @@ export default async function ReportesPage({ searchParams }: Props) {
   )
   const maxDaysAll = Math.max(...utilization.map(u => u.totalDays), 1)
 
-  function fleetPageUrl(p: number) {
-    const qs = new URLSearchParams({ desde, hasta, pagina_flota: String(p) })
+  // URL de la página conservando filtros, página de flota y el orden de las 3 tablas
+  function reportUrl(opts: { paginaFlota?: number; table?: SortTable; sort?: SortState | null } = {}) {
+    const qs = new URLSearchParams({ desde, hasta })
     if (tipo !== 'todas') qs.set('tipo', tipo)
+    const pf = opts.table === 'flota' ? 1 : opts.paginaFlota ?? safePageFlota
+    if (pf > 1) qs.set('pagina_flota', String(pf))
+    for (const t of Object.keys(SORT_PARAMS) as SortTable[]) {
+      const s = opts.table === t ? opts.sort ?? null : sorts[t]
+      if (s) { qs.set(SORT_PARAMS[t].key, s.key); qs.set(SORT_PARAMS[t].dir, s.dir) }
+    }
     return `/dashboard/reportes?${qs}`
   }
+  const fleetPageUrl = (p: number) => reportUrl({ paginaFlota: p })
+  const sortHref = (table: SortTable) => (next: SortState | null) => reportUrl({ table, sort: next })
+
+  // Alertas: orden elegido o, por defecto, la consulta (vencimiento más próximo primero)
+  type AlertRow = NonNullable<typeof openAlerts>[number]
+  const alertVehicle = (a: AlertRow) => a.vehicles as unknown as { brand: string; model: string; plates: string; id?: string } | null
+  const alertsSorted = sortRows(openAlerts ?? [], sorts.alertas, {
+    vehiculo:    a => { const v = alertVehicle(a); return v ? `${v.brand} ${v.model}` : null },
+    tipo:        a => ALERT_TYPE_LABELS[a.alert_type] ?? a.alert_type,
+    vencimiento: a => a.due_date,
+  })
 
   const STATUS_VEHICLE_COLORS: Record<string, string> = {
     available:   'bg-green-100 text-green-700',
@@ -303,6 +351,12 @@ export default async function ReportesPage({ searchParams }: Props) {
             <span className="ml-2 text-gray-400 font-normal">({reservationsInPeriod?.length ?? 0} resultados)</span>
           </h2>
           <form method="GET" action="/dashboard/reportes" className="flex items-center gap-2">
+            {(Object.keys(SORT_PARAMS) as SortTable[]).map(t => sorts[t] && (
+              <span key={t} hidden>
+                <input type="hidden" name={SORT_PARAMS[t].key} value={sorts[t]!.key} />
+                <input type="hidden" name={SORT_PARAMS[t].dir} value={sorts[t]!.dir} />
+              </span>
+            ))}
             <input
               type="date"
               name="desde"
@@ -336,11 +390,11 @@ export default async function ReportesPage({ searchParams }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">No.</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Cliente</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Vehículo</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Período</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
+                  <SortLinkTh label="No." sortKey="folio" sort={sorts.periodo} href={sortHref('periodo')} />
+                  <SortLinkTh label="Cliente" sortKey="cliente" sort={sorts.periodo} href={sortHref('periodo')} />
+                  <SortLinkTh label="Vehículo" sortKey="vehiculo" sort={sorts.periodo} href={sortHref('periodo')} className="hidden sm:table-cell" />
+                  <SortLinkTh label="Período" sortKey="fechas" sort={sorts.periodo} href={sortHref('periodo')} className="hidden md:table-cell" />
+                  <SortLinkTh label="Estado" sortKey="estado" sort={sorts.periodo} href={sortHref('periodo')} />
                   <th className="text-right text-xs font-medium text-gray-500 px-4 py-3"></th>
                 </tr>
               </thead>
@@ -405,10 +459,10 @@ export default async function ReportesPage({ searchParams }: Props) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
-                <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Vehículo</th>
-                <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Placas</th>
-                <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Reservas</th>
-                <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Días rentados</th>
+                <SortLinkTh label="Vehículo" sortKey="vehiculo" sort={sorts.flota} href={sortHref('flota')} />
+                <SortLinkTh label="Placas" sortKey="placas" sort={sorts.flota} href={sortHref('flota')} />
+                <SortLinkTh label="Reservas" sortKey="reservas" sort={sorts.flota} href={sortHref('flota')} align="right" />
+                <SortLinkTh label="Días rentados" sortKey="dias" sort={sorts.flota} href={sortHref('flota')} align="right" />
                 <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell w-40">Ocupación</th>
               </tr>
             </thead>
@@ -508,14 +562,14 @@ export default async function ReportesPage({ searchParams }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Vehículo</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Tipo de alerta</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Vencimiento</th>
+                  <SortLinkTh label="Vehículo" sortKey="vehiculo" sort={sorts.alertas} href={sortHref('alertas')} />
+                  <SortLinkTh label="Tipo de alerta" sortKey="tipo" sort={sorts.alertas} href={sortHref('alertas')} />
+                  <SortLinkTh label="Vencimiento" sortKey="vencimiento" sort={sorts.alertas} href={sortHref('alertas')} className="hidden sm:table-cell" />
                   <th className="text-right text-xs font-medium text-gray-500 px-4 py-3"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {openAlerts.map((a) => {
+                {alertsSorted.map((a) => {
                   const v = a.vehicles as unknown as { brand: string; model: string; plates: string; id?: string } | null
                   const isOverdue = a.due_date && new Date(a.due_date) < new Date()
                   return (

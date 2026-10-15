@@ -5,6 +5,16 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import ClientesSearch from './ClientesSearch'
+import { parseSort, sortOrders, applySortParams, type SortState } from '@/lib/tableSort'
+import { SortLinkTh } from '@/components/dashboard/SortableTh'
+
+const SORT_KEYS = ['cliente', 'identificacion', 'contacto', 'registro'] as const
+const SORT_COLUMNS: Record<typeof SORT_KEYS[number], readonly string[]> = {
+  cliente:        ['full_name'],
+  identificacion: ['id_number'],
+  contacto:       ['phone'],
+  registro:       ['created_at'],
+}
 
 const ID_TYPE_LABELS: Record<string, string> = {
   license:  'Licencia',
@@ -14,11 +24,12 @@ const ID_TYPE_LABELS: Record<string, string> = {
 const PAGE_SIZE = 20
 
 interface Props {
-  searchParams: Promise<{ q?: string; page?: string }>
+  searchParams: Promise<{ q?: string; page?: string; orden?: string; dir?: string }>
 }
 
 export default async function ClientesPage({ searchParams }: Props) {
-  const { q = '', page: pageParam = '1' } = await searchParams
+  const { q = '', page: pageParam = '1', orden, dir } = await searchParams
+  const sort = parseSort(orden, dir, SORT_KEYS)
   const page = Math.max(1, Number(pageParam) || 1)
   const from = (page - 1) * PAGE_SIZE
   const to   = from + PAGE_SIZE - 1
@@ -39,8 +50,10 @@ export default async function ClientesPage({ searchParams }: Props) {
     .from('clients')
     .select('id, full_name, id_type, id_number, phone, email, license_expiry, created_at', { count: 'exact' })
     .eq('tenant_id', profile.tenant_id)
-    .order('created_at', { ascending: false })
     .range(from, to)
+  for (const o of sortOrders(sort, SORT_COLUMNS, [['created_at', false]])) {
+    query = query.order(o.column, { ascending: o.ascending, nullsFirst: false })
+  }
 
   if (q) query = query.or(`full_name.ilike.%${q}%,id_number.ilike.%${q}%,phone.ilike.%${q}%,email.ilike.%${q}%`)
 
@@ -71,12 +84,13 @@ export default async function ClientesPage({ searchParams }: Props) {
   const filterParams = new URLSearchParams()
   if (q) filterParams.set('q', q)
 
-  function pageUrl(p: number) {
-    const params = new URLSearchParams(filterParams)
+  function pageUrl(p: number, so: SortState | null = sort) {
+    const params = applySortParams(new URLSearchParams(filterParams), so)
     if (p > 1) params.set('page', String(p))
     const str = params.toString()
     return `/dashboard/clientes${str ? `?${str}` : ''}`
   }
+  const sortHref = (next: SortState | null) => pageUrl(1, next)
 
   function getPageNumbers(current: number, total: number): (number | '...')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1)
@@ -113,7 +127,7 @@ export default async function ClientesPage({ searchParams }: Props) {
       </div>
 
       {/* Búsqueda */}
-      <ClientesSearch defaultValue={q} />
+      <ClientesSearch defaultValue={q} sort={sort} />
 
       {/* Tabla */}
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
@@ -122,9 +136,10 @@ export default async function ClientesPage({ searchParams }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Cliente</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Identificación</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Contacto</th>
+                  <SortLinkTh label="Cliente" sortKey="cliente" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Identificación" sortKey="identificacion" sort={sort} href={sortHref} className="hidden sm:table-cell" />
+                  <SortLinkTh label="Contacto" sortKey="contacto" sort={sort} href={sortHref} className="hidden md:table-cell" />
+                  <SortLinkTh label="Registro" sortKey="registro" sort={sort} href={sortHref} className="hidden lg:table-cell" />
                   <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Acciones</th>
                 </tr>
               </thead>
@@ -164,6 +179,9 @@ export default async function ClientesPage({ searchParams }: Props) {
                       <td className="px-4 py-3 hidden md:table-cell text-sm text-gray-600">
                         <p>{c.phone ?? <span className="text-gray-300">—</span>}</p>
                         <p className="text-xs text-gray-400">{c.email ?? ''}</p>
+                      </td>
+                      <td className="px-4 py-3 hidden lg:table-cell text-xs text-gray-500 whitespace-nowrap">
+                        {new Date(c.created_at).toLocaleDateString('es-MX')}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <Link

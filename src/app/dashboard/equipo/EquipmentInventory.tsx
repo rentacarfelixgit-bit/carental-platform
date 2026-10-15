@@ -11,6 +11,9 @@ import {
   EQUIPMENT_TYPES, EQUIPMENT_STATUS, EQUIPMENT_TYPE_KEYS, EQUIPMENT_STATUS_KEYS,
   type EquipmentType, type EquipmentStatus,
 } from '@/lib/equipment'
+import { sortRows } from '@/lib/tableSort'
+import { useTableSort } from '@/lib/useTableSort'
+import { SortButtonTh } from '@/components/dashboard/SortableTh'
 
 export interface InventoryItem {
   id: string
@@ -31,6 +34,7 @@ export default function EquipmentInventory({ items, isAdmin }: { items: Inventor
   const [q, setQ]           = useState('')
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<InventoryItem | null>(null)
+  const { sort, onSort } = useTableSort<'codigo' | 'tipo' | 'estado' | 'lotiene'>()
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
@@ -43,6 +47,13 @@ export default function EquipmentInventory({ items, isAdmin }: { items: Inventor
     (!type || it.type === type) &&
     (!q.trim() || `${it.code} ${it.name ?? ''} ${it.holder?.client ?? ''} ${it.holder?.folio ?? ''}`.toLowerCase().includes(q.trim().toLowerCase()))
   )
+
+  const rows = sortRows(filtered, sort, {
+    codigo:  it => it.code,
+    tipo:    it => EQUIPMENT_TYPES[it.type as EquipmentType]?.label ?? it.type,
+    estado:  it => EQUIPMENT_STATUS[it.status as EquipmentStatus]?.label ?? it.status,
+    lotiene: it => it.holder?.client ?? null,
+  })
 
   return (
     <div className="space-y-4">
@@ -86,15 +97,15 @@ export default function EquipmentInventory({ items, isAdmin }: { items: Inventor
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
-                <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Código</th>
-                <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden sm:table-cell">Tipo</th>
-                <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
-                <th className="text-left text-xs font-medium text-gray-500 px-4 py-3 hidden md:table-cell">Lo tiene</th>
+                <SortButtonTh label="Código" sortKey="codigo" sort={sort} onSort={onSort} />
+                <SortButtonTh label="Tipo" sortKey="tipo" sort={sort} onSort={onSort} className="hidden sm:table-cell" />
+                <SortButtonTh label="Estado" sortKey="estado" sort={sort} onSort={onSort} />
+                <SortButtonTh label="Lo tiene" sortKey="lotiene" sort={sort} onSort={onSort} className="hidden md:table-cell" />
                 <th className="text-right text-xs font-medium text-gray-500 px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filtered.map(it => {
+              {rows.map(it => {
                 const st = EQUIPMENT_STATUS[it.status as EquipmentStatus] ?? EQUIPMENT_STATUS.available
                 return (
                   <tr key={it.id} className="hover:bg-gray-50">

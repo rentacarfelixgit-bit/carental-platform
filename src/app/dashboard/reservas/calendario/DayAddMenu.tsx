@@ -6,8 +6,15 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import EventModal from './EventModal'
+import { calendarFromQuery } from '@/lib/calendarReturn'
 
-export default function DayAddMenu({ date, variant = 'hover' }: { date: string; variant?: 'hover' | 'mobile' }) {
+export default function DayAddMenu({ date, variant = 'hover', returnVista = 'mes' }: {
+  date: string
+  variant?: 'hover' | 'mobile'
+  /** A qué vista del calendario regresar después de crear la reserva o el contrato */
+  returnVista?: 'mes' | 'dia'
+}) {
+  const back = calendarFromQuery(date.slice(0, 7), Number(date.slice(8, 10)), returnVista)
   const [open, setOpen] = useState(false)
   const [eventOpen, setEventOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -41,10 +48,10 @@ export default function DayAddMenu({ date, variant = 'hover' }: { date: string; 
 
       {open && (
         <div className="absolute right-0 top-full mt-1 z-40 w-48 bg-white border border-gray-200 rounded-xl shadow-lg py-1 overflow-hidden">
-          <Link href={`/dashboard/reservas/nueva?start=${date}`} className={item}>
+          <Link href={`/dashboard/reservas/nueva?start=${date}&${back}`} className={item}>
             <span className="w-2 h-2 rounded-full bg-blue-500" /> Nueva reserva
           </Link>
-          <Link href={`/dashboard/contratos/nuevo`} className={item}>
+          <Link href={`/dashboard/contratos/nuevo?${back}`} className={item}>
             <span className="w-2 h-2 rounded-full bg-purple-500" /> Nuevo contrato
           </Link>
           <div className="my-1 border-t border-gray-100" />

@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import ClearFiltersLink from './ClearFiltersLink'
+import { parseSort, sortOrders, applySortParams, type SortState } from '@/lib/tableSort'
+import { SortLinkTh } from '@/components/dashboard/SortableTh'
 import EditVehicleLink from './EditVehicleLink'
 import MaintenanceLink from './MaintenanceLink'
 import VehicleStatusSelect from './VehicleStatusSelect'
@@ -53,12 +55,21 @@ function getPageNumbers(current: number, total: number): (number | '...')[] {
   return pages
 }
 
+const SORT_KEYS = ['vehiculo', 'placas', 'estado', 'seguro'] as const
+const SORT_COLUMNS: Record<typeof SORT_KEYS[number], readonly string[]> = {
+  vehiculo: ['brand', 'model', 'year'],
+  placas:   ['plates'],
+  estado:   ['status'],          // enum: disponible → reservado → en uso → mantenimiento → retenido
+  seguro:   ['insurance_expiry'],
+}
+
 interface Props {
-  searchParams: Promise<{ q?: string; status?: string; inactivos?: string; page?: string }>
+  searchParams: Promise<{ q?: string; status?: string; inactivos?: string; page?: string; orden?: string; dir?: string }>
 }
 
 export default async function FlotaPage({ searchParams }: Props) {
-  const { q = '', status = '', inactivos = '', page: pageParam = '1' } = await searchParams
+  const { q = '', status = '', inactivos = '', page: pageParam = '1', orden, dir } = await searchParams
+  const sort = parseSort(orden, dir, SORT_KEYS)
   const page = Math.max(1, Number(pageParam) || 1)
   const from = (page - 1) * PAGE_SIZE
   const to   = from + PAGE_SIZE - 1
@@ -82,8 +93,10 @@ export default async function FlotaPage({ searchParams }: Props) {
     .from('vehicles')
     .select('id, plates, brand, model, year, color, status, status_locked, active, insurance_expiry, permit_expiry', { count: 'exact' })
     .eq('tenant_id', profile.tenant_id)
-    .order('created_at', { ascending: false })
     .range(from, to)
+  for (const o of sortOrders(sort, SORT_COLUMNS, [['created_at', false]])) {
+    query = query.order(o.column, { ascending: o.ascending, nullsFirst: false })
+  }
 
   if (!inactivos) query = query.eq('active', true)
   if (status)     query = query.eq('status', status)
@@ -114,12 +127,13 @@ export default async function FlotaPage({ searchParams }: Props) {
   if (status)    filterParams.set('status', status)
   if (inactivos) filterParams.set('inactivos', inactivos)
 
-  function pageUrl(p: number) {
-    const params = new URLSearchParams(filterParams)
+  function pageUrl(p: number, so: SortState | null = sort) {
+    const params = applySortParams(new URLSearchParams(filterParams), so)
     if (p > 1) params.set('page', String(p))
     const str = params.toString()
     return `/dashboard/flota${str ? `?${str}` : ''}`
   }
+  const sortHref = (next: SortState | null) => pageUrl(1, next)
 
   const pageNumbers = getPageNumbers(page, totalPages)
 
@@ -173,6 +187,9 @@ export default async function FlotaPage({ searchParams }: Props) {
 
       {/* Filtros */}
       <form method="GET" className="flex flex-wrap gap-3 mb-5">
+        {/* Conserva el orden de la tabla al filtrar */}
+        {sort && <input type="hidden" name="orden" value={sort.key} />}
+        {sort && <input type="hidden" name="dir" value={sort.dir} />}
         <input
           name="q"
           defaultValue={q}
@@ -261,10 +278,10 @@ export default async function FlotaPage({ searchParams }: Props) {
             <table className="hidden md:table w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Vehículo</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Placas</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
-                  <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Seguro</th>
+                  <SortLinkTh label="Vehículo" sortKey="vehiculo" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Placas" sortKey="placas" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Estado" sortKey="estado" sort={sort} href={sortHref} />
+                  <SortLinkTh label="Seguro" sortKey="seguro" sort={sort} href={sortHref} />
                   <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Acciones</th>
                 </tr>
               </thead>

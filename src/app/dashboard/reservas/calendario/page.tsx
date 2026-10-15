@@ -9,6 +9,8 @@ import DayAddMenu from './DayAddMenu'
 import EventChip from './EventChip'
 import { EVENT_TYPES, EVENT_TYPE_KEYS, EVENT_PEOPLE_SELECT, eventPeople, type CalendarEventRow, type CalendarEventType } from '@/lib/calendarEvents'
 import { rentalFolio } from '@/lib/rentalLabels'
+import { calendarFromQuery, dayViewHref } from '@/lib/calendarReturn'
+import ScrollToDay from './ScrollToDay'
 
 const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   pending:   { bg: 'bg-yellow-100', text: 'text-yellow-800', dot: 'bg-yellow-400' },
@@ -72,11 +74,12 @@ function firstDowOfMonth(year: number, month: number) {
 }
 
 interface Props {
-  searchParams: Promise<{ mes?: string }>
+  searchParams: Promise<{ mes?: string; dia?: string }>
 }
 
 export default async function CalendarioReservasPage({ searchParams }: Props) {
-  const { mes } = await searchParams
+  const { mes, dia } = await searchParams
+  const focusDay = Number(dia) >= 1 && Number(dia) <= 31 ? Number(dia) : null
   const { year, month } = parseMonth(mes)
 
   const totalDays = daysInMonth(year, month)
@@ -113,8 +116,8 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
     .select('id, start_date, end_date, status, clients(full_name), vehicles(brand, model, plates)')
     .eq('tenant_id', profile.tenant_id)
     .not('status', 'in', '("cancelled","completed")')
-    .lte('start_date', lastDate)
-    .gte('end_date',   firstDate)
+    .lte('start_date', `${lastDate}T23:59:59`)
+    .gte('end_date',   `${firstDate}T00:00:00`)
     .order('start_date') as { data: Reservation[] | null }
 
   // Eventos de agenda del mes
@@ -161,7 +164,8 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
   for (const r of reservations ?? []) {
     for (let d = 1; d <= totalDays; d++) {
       const ds = dayStr(year, month, d)
-      if (r.start_date <= ds && r.end_date >= ds) byDay[d].push(r)
+      // Comparar solo la parte de fecha (los campos traen hora); antes el día de salida quedaba fuera
+      if (r.start_date.slice(0, 10) <= ds && r.end_date.slice(0, 10) >= ds) byDay[d].push(r)
     }
   }
 
@@ -198,6 +202,8 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
           <Link href={`?mes=${nextMonth}`} className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">→</Link>
         </div>
       </div>
+
+      <ScrollToDay day={focusDay} />
 
       {/* Leyenda */}
       <div className="flex items-center gap-3 mb-4 flex-wrap">
@@ -253,13 +259,15 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
             const extra    = evs.length + rsvs.length - evShown.length - rsvShown.length
 
             return (
-              <div key={`day-${day}`} className={`min-h-[130px] p-2 group relative ${i === cells.length - 7 ? 'rounded-bl-xl' : ''} ${i === cells.length - 1 ? 'rounded-br-xl' : ''} ${isLastRow ? '' : 'border-b border-gray-100'} ${isToday ? 'bg-blue-50/50' : isWeekend ? 'bg-gray-50/50' : 'bg-white'} hover:bg-gray-50/80 transition-colors`}>
+              <div key={`day-${day}`} data-cal-day={day} className={`min-h-[130px] p-2 group relative ${focusDay === day ? 'ring-2 ring-inset ring-blue-400' : ''} ${i === cells.length - 7 ? 'rounded-bl-xl' : ''} ${i === cells.length - 1 ? 'rounded-br-xl' : ''} ${isLastRow ? '' : 'border-b border-gray-100'} ${isToday ? 'bg-blue-50/50' : isWeekend ? 'bg-gray-50/50' : 'bg-white'} hover:bg-gray-50/80 transition-colors`}>
                 <div className="flex items-center justify-between mb-1.5">
-                  <span
-                    className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-semibold ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700'}`}
+                  <Link
+                    href={dayViewHref(ds)}
+                    title="Ver todo el día"
+                    className={`w-7 h-7 flex items-center justify-center rounded-full text-sm font-semibold transition-colors ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
                   >
                     {day}
-                  </span>
+                  </Link>
                   <DayAddMenu date={ds} />
                 </div>
                 <div className="space-y-0.5">
@@ -267,7 +275,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                   {rsvShown.map((r) => {
                     const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
                     return (
-                      <Link key={r.id} href={`/dashboard/reservas/${r.id}`}
+                      <Link key={r.id} href={`/dashboard/reservas/${r.id}?${calendarFromQuery(`${year}-${pad2(month)}`, day)}`}
                         className={`flex items-center gap-1 w-full px-1.5 py-0.5 rounded text-xs truncate ${col.bg} ${col.text} hover:brightness-95`}
                         title={`${clientName(r)} · ${vehicleLabel(r)}`}
                       >
@@ -276,7 +284,11 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                       </Link>
                     )
                   })}
-                  {extra > 0 && <p className="text-xs text-gray-400 pl-1">+{extra} más</p>}
+                  {extra > 0 && (
+                    <Link href={dayViewHref(ds)} className="block text-xs text-blue-600 hover:underline pl-1">
+                      +{extra} más · ver todo
+                    </Link>
+                  )}
                 </div>
               </div>
             )
@@ -296,14 +308,14 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
           const hasRsvs = rsvs.length > 0 || evs.length > 0
 
           return (
-            <div key={day} className={`rounded-xl border ${isToday ? 'border-blue-200 bg-blue-50/40' : hasRsvs ? 'border-gray-200 bg-white' : 'border-transparent bg-transparent'}`}>
+            <div key={day} data-cal-day={day} className={`rounded-xl border ${focusDay === day ? 'ring-2 ring-blue-400' : ''} ${isToday ? 'border-blue-200 bg-blue-50/40' : hasRsvs ? 'border-gray-200 bg-white' : 'border-transparent bg-transparent'}`}>
               <div className="flex items-center gap-3 px-3 py-2">
                 {/* Número + día */}
                 <div className="flex-shrink-0 text-center w-10">
                   <p className="text-xs text-gray-400 uppercase">{dowLabel}</p>
-                  <div className={`w-8 h-8 mx-auto flex items-center justify-center rounded-full text-sm font-semibold ${isToday ? 'bg-blue-600 text-white' : 'text-gray-800'}`}>
+                  <Link href={dayViewHref(ds)} className={`w-8 h-8 mx-auto flex items-center justify-center rounded-full text-sm font-semibold ${isToday ? 'bg-blue-600 text-white' : 'text-gray-800'}`}>
                     {day}
-                  </div>
+                  </Link>
                 </div>
 
                 {/* Reservas o placeholder */}
@@ -314,7 +326,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
                       {rsvs.map((r) => {
                         const col = STATUS_COLORS[r.status] ?? STATUS_COLORS.pending
                         return (
-                          <Link key={r.id} href={`/dashboard/reservas/${r.id}`}
+                          <Link key={r.id} href={`/dashboard/reservas/${r.id}?${calendarFromQuery(`${year}-${pad2(month)}`, day)}`}
                             className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm ${col.bg} ${col.text}`}
                           >
                             <span className={`flex-shrink-0 w-2 h-2 rounded-full ${col.dot}`} />
@@ -340,7 +352,7 @@ export default async function CalendarioReservasPage({ searchParams }: Props) {
       </div>
 
       <p className="text-xs text-gray-400 mt-4 text-center hidden md:block">
-        Pasa el cursor sobre un día y usa + para crear una reserva, un contrato o un evento · Clic en un evento o renta para verlo
+        Clic en el número del día para ver todo lo de ese día · Usa + para crear una reserva, un contrato o un evento
       </p>
     </div>
   )

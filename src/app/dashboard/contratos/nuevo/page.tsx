@@ -4,8 +4,14 @@
 
 import NuevaReservaForm from '../../reservas/nueva/NuevaReservaForm'
 import { loadRentalFormData, nowInTimezone } from '../../reservas/nueva/loadFormData'
+import { parseCalendarReturn } from '@/lib/calendarReturn'
 
-export default async function NuevoContratoPage() {
+interface Props {
+  searchParams: Promise<{ from?: string; mes?: string; dia?: string; vista?: string }>
+}
+
+export default async function NuevoContratoPage({ searchParams }: Props) {
+  const sp = await searchParams
   const { clients, defaultPrices, timezone } = await loadRentalFormData()
 
   return (
@@ -14,6 +20,7 @@ export default async function NuevoContratoPage() {
       clients={clients}
       initialStartDate={nowInTimezone(timezone)}
       defaultPrices={defaultPrices}
+      calendarReturn={parseCalendarReturn(sp)}
     />
   )
 }

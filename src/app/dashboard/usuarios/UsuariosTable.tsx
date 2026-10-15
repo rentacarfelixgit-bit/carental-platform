@@ -2,6 +2,9 @@
 
 import { useState } from 'react'
 import ToggleActiveButton from './ToggleActiveButton'
+import { sortRows } from '@/lib/tableSort'
+import { useTableSort } from '@/lib/useTableSort'
+import { SortButtonTh } from '@/components/dashboard/SortableTh'
 import ChangePasswordModal from './ChangePasswordModal'
 
 const roleLabels: Record<string, { label: string; className: string }> = {
@@ -26,20 +29,27 @@ interface Props {
 
 export default function UsuariosTable({ usuarios, currentUserId }: Props) {
   const [pwdModal, setPwdModal] = useState<{ id: string; name: string } | null>(null)
+  const { sort, onSort } = useTableSort<'usuario' | 'rol' | 'estado'>()
+  const ROLE_RANK: Record<string, number> = { superadmin: 1, admin: 2, operator: 3 }
+  const rows = sortRows(usuarios, sort, {
+    usuario: u => u.full_name,
+    rol:     u => ROLE_RANK[u.role] ?? 9,
+    estado:  u => (u.active ? 1 : 2),   // activos primero en ascendente
+  })
 
   return (
     <>
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-100 bg-gray-50">
-            <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Usuario</th>
-            <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Rol</th>
-            <th className="text-left text-xs font-medium text-gray-500 px-4 py-3">Estado</th>
+            <SortButtonTh label="Usuario" sortKey="usuario" sort={sort} onSort={onSort} />
+            <SortButtonTh label="Rol" sortKey="rol" sort={sort} onSort={onSort} />
+            <SortButtonTh label="Estado" sortKey="estado" sort={sort} onSort={onSort} />
             <th className="text-right text-xs font-medium text-gray-500 px-4 py-3">Acciones</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
-          {usuarios.map((u) => {
+          {rows.map((u) => {
             const initials = u.full_name
               .split(' ')
               .slice(0, 2)

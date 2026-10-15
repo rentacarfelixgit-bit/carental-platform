@@ -9,7 +9,9 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { rentalFolio } from '@/lib/rentalLabels'
+import { parseCalendarReturn, calendarHref } from '@/lib/calendarReturn'
 import { randomUUID } from 'crypto'
+import { parseBreakdown, computeBreakdown, selectionFromBreakdown, rentalDaysBetween, insuranceColumns } from '@/lib/reservationPrices'
 
 export type ReservationFormState = {
   error?: string
@@ -332,6 +334,17 @@ export async function createReservation(
   const toPrice = (v?: string) => v ? parseFloat(v) || null : null
   const toBool  = (v?: string) => v === 'true' ? true : v === 'false' ? false : null
 
+  // Desglose de precios (seguros, extras, impuestos, otros). Se recalcula aquí con los días
+  // reales y la tarifa enviada: el total guardado siempre coincide con el desglose.
+  const sentBreakdown = parseBreakdown(formData.get('price_breakdown')?.toString() ?? '')
+  const breakdown = sentBreakdown
+    ? computeBreakdown({
+        ...selectionFromBreakdown(sentBreakdown),
+        days: rentalDaysBetween(start_date, end_date),
+        dailyRate: toPrice(daily_rate) ?? sentBreakdown.daily_rate,
+      })
+    : null
+
   // Validar que end_date > start_date
   if (new Date(end_date) <= new Date(start_date)) {
     return { fieldErrors: { end_date: ['La fecha de fin debe ser posterior a la de inicio'] } }
@@ -410,9 +423,7 @@ export async function createReservation(
   }
 
   // Insertar reserva
-  const { data: reservation, error } = await ctx.supabase
-    .from('reservations')
-    .insert({
+  const insertPayload: Record<string, unknown> = {
       tenant_id:    ctx.tenantId,
       client_id,
       vehicle_id,
@@ -431,7 +442,8 @@ export async function createReservation(
       cash_payment: toPrice(cash_payment),
       card_payment: toPrice(card_payment),
       daily_rate:   toPrice(daily_rate),
-      total_amount: total_amount ? parseFloat(total_amount) : null,
+      total_amount: breakdown ? breakdown.total : total_amount ? parseFloat(total_amount) : null,
+      price_breakdown: breakdown,
       payment_method: payment_method || null,
       insurance_cdw_accepted: toBool(insurance_cdw_accepted),
       insurance_cdw_price:    toPrice(insurance_cdw_price),
@@ -441,11 +453,18 @@ export async function createReservation(
       insurance_tw_price:     toPrice(insurance_tw_price),
       insurance_at_accepted:  toBool(insurance_at_accepted),
       insurance_at_price:     toPrice(insurance_at_price),
+      ...(breakdown ? insuranceColumns(breakdown) : {}),
       created_by:   ctx.user.id,
       updated_at:   new Date().toISOString(),
-    })
-    .select('id')
-    .single()
+    }
+  let { data: reservation, error } = await ctx.supabase
+    .from('reservations').insert(insertPayload).select('id').single()
+  // Si aún no se aplicó el script SQL del desglose, guardar sin esa columna (el total sí se guarda)
+  if (error && /price_breakdown/.test(error.message)) {
+    delete insertPayload.price_breakdown
+    ;({ data: reservation, error } = await ctx.supabase
+      .from('reservations').insert(insertPayload).select('id').single())
+  }
 
   if (error || !reservation) {
     // Si el cliente se creó en este mismo intento, lo quitamos para no dejarlo huérfano.
@@ -490,6 +509,16 @@ export async function createReservation(
   revalidatePath('/dashboard/contratos')
   revalidatePath('/dashboard/flota')
   if (newClientRow) revalidatePath('/dashboard/clientes')
+  revalidatePath('/dashboard/reservas/calendario')
+  // Creado desde el calendario → regresar a la misma vista (mes o día). Se arma la URL con
+  // parámetros validados, nunca con una URL que venga del formulario.
+  const calReturn = parseCalendarReturn({
+    from:  formData.get('cal_from')?.toString(),
+    mes:   formData.get('cal_mes')?.toString(),
+    dia:   formData.get('cal_dia')?.toString(),
+    vista: formData.get('cal_vista')?.toString(),
+  })
+  if (calReturn) redirect(calendarHref(calReturn))
   // Contrato: ir directo al detalle para tomar las fotos de salida y entregar el vehículo
   redirect(isWalkIn ? `/dashboard/reservas/${reservation.id}` : '/dashboard/reservas')
 }

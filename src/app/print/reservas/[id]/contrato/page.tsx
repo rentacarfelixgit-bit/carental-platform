@@ -3,6 +3,7 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { rentalFolio } from '@/lib/rentalLabels'
+import { BREAKDOWN_SELECT, resolveBreakdown, INSURANCE_ITEMS, EXTRA_ITEMS, TAX_ITEMS } from '@/lib/reservationPrices'
 import { EQUIPMENT_CONDITION, EQUIPMENT_TYPES, type EquipmentCondition, type EquipmentType } from '@/lib/equipment'
 import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
 import { redirect } from 'next/navigation'
@@ -43,10 +44,12 @@ function FuelGauge({ level, small }: { level?: string; small?: boolean }) {
           width: bw, height: bh,
           border: '1px solid #000',
           borderLeft: i === 0 ? '1px solid #000' : 'none',
-          background: '#fff',
+          // Casilla del nivel registrado en la inspección: rellena en negro
+          background: i === selected ? '#000' : '#fff',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: fs, fontWeight: 400,
-          color: '#000',
+          fontSize: fs, fontWeight: i === selected ? 700 : 400,
+          color: i === selected ? '#fff' : '#000',
+          WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact',
         }}>{s}</div>
       ))}
     </div>
@@ -110,20 +113,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const spZip          = p('zip_code',     20)
   const spLocalPhone   = p('local_phone',  30)
   const spLocalAddress = p('local_address',200)
-  type InsStatus = 'a' | 'd' | ''
-  const ins = (key: string): InsStatus => { const v = p(key); return (v === 'a' || v === 'd') ? v : '' }
-  const segCdw = ins('seg_cdw')
-  const segLia = ins('seg_lia')
-  const segTw  = ins('seg_tw')
-  const segAt  = ins('seg_at')
-  const segPkg = ins('seg_pkg')
-  const segBas = ins('seg_bas')
-  const priceCdw  = p('price_cdw',  12)
-  const priceLia  = p('price_lia',  12)
-  const priceTw   = p('price_tw',   12)
-  const priceAt   = p('price_at',   12)
-  const pricePkg  = p('price_pkg',  12)
-  const priceBas  = p('price_bas',  12)
+  // Respaldo para enlaces antiguos con parámetros (hoy todo se lee de la reserva)
   const deductBas = p('deduct_bas', 12)
 
   const supabase = await createClient()
@@ -139,18 +129,46 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
     .from('tenants').select('name, settings').eq('id', profile.tenant_id).single()
 
   // Reserva
-  const { data: reservation } = await supabase
-    .from('reservations')
-    .select(`
-      id, number, origin, start_date, end_date, status, notes, total_amount,
+  const contractQuery = (cols: string) => supabase.from('reservations').select(cols)
+    .eq('id', id).eq('tenant_id', profile.tenant_id).single()
+  let resQ = await contractQuery(`
+      id, number, origin, start_date, end_date, status, notes, total_amount, daily_rate,
+      payment_method, cash_payment, card_payment,
+      ${BREAKDOWN_SELECT},
+      folio, approval_number, prepared_by, driver_age, client_has_pets, insurance_deductible,
+      additional_driver_license, additional_driver_phone, additional_driver2_license, additional_driver2_phone,
       clients ( id, full_name, id_type, id_number, license_number, license_expiry, passport_number, phone, email, address, city, state, zip_code, local_phone, local_address ),
       vehicles ( id, plates, brand, model, year, color, vin ),
       reservation_extras ( id, extra_type, description )
     `)
-    .eq('id', id)
-    .eq('tenant_id', profile.tenant_id)
-    .single()
+  // Si aún no se aplicó el script SQL, imprimir igual con las columnas de siempre
+  if (resQ.error && (resQ.error.code === '42703' || /does not exist/i.test(resQ.error.message))) {
+    resQ = await contractQuery(`
+      id, number, origin, start_date, end_date, status, notes, total_amount, daily_rate,
+      payment_method, cash_payment, card_payment,
+      clients ( id, full_name, id_type, id_number, license_number, license_expiry, passport_number, phone, email, address, city, state, zip_code, local_phone, local_address ),
+      vehicles ( id, plates, brand, model, year, color, vin ),
+      reservation_extras ( id, extra_type, description )
+    `)
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reservation = resQ.data as any
+  const reservationError = resQ.error
 
+  // Una columna que falta en la BD hace fallar la consulta: mostrarlo en lugar de redirigir en silencio
+  if (reservationError && reservationError.code !== 'PGRST116') {
+    return (
+      <div className="p-6 max-w-2xl mx-auto">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-sm text-red-800 space-y-2">
+          <p className="font-semibold">No se pudo cargar la renta.</p>
+          <p className="font-mono text-xs break-words">{reservationError.message}</p>
+          {/column .* does not exist/i.test(reservationError.message) && (
+            <p>Falta aplicar en Supabase (SQL Editor) el script <b>supabase_contrato_desglose_oct2026.sql</b> de la raíz del proyecto.</p>
+          )}
+        </div>
+      </div>
+    )
+  }
   if (!reservation) redirect('/dashboard/reservas')
 
   const client = reservation.clients as unknown as {
@@ -183,11 +201,13 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
   const { data: checkout } = await supabase
     .from('inspections').select('odometer, fuel_level, notes')
-    .eq('reservation_id', id).eq('type', 'checkout').is('swap_id', null).maybeSingle()
+    .eq('reservation_id', id).eq('type', 'checkout').is('swap_id', null)
+    .order('created_at', { ascending: false }).limit(1).maybeSingle()
 
   const { data: checkin } = await supabase
     .from('inspections').select('odometer, fuel_level, notes')
-    .eq('reservation_id', id).eq('type', 'checkin').is('swap_id', null).maybeSingle()
+    .eq('reservation_id', id).eq('type', 'checkin').is('swap_id', null)
+    .order('created_at', { ascending: false }).limit(1).maybeSingle()
 
   const nights = Math.ceil(
     (new Date(reservation.end_date).getTime() - new Date(reservation.start_date).getTime()) / 86400000
@@ -246,22 +266,42 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const bizPhone   = s.phone   ? `TELÉFONO: ${String(s.phone)}.` : 'TELÉFONO: 829-864-3074.'
   const bizRnc     = s.rnc     ? `RNC: ${String(s.rnc)}.` : 'RNC: 131754092.'
 
-  // ── Impuestos ───────────────────────────────────────────────────────────────
-  const taxItbis   = Boolean(s.tax_itbis)
-  const taxAirport = Boolean(s.tax_airport)
-  const taxDigital = Boolean(s.tax_digital)
+  // ── Precios: exactamente los de la reserva (mismo cálculo que Nueva reserva y "Preparar contrato") ──
+  const pricing = resolveBreakdown(reservation)
+  const bd = pricing.breakdown
+  const bLine = (key: string) => bd.lines.find(l => l.key === key)
+  const fmtAmt = (n: number | null | undefined) => n != null && n > 0 ? fmtRD(n) : ''
+  const cashPaid = Number(reservation.cash_payment) || 0
+  const cardPaid = Number(reservation.card_payment) || 0
+  const balance  = pricing.total - cashPaid - cardPaid
 
-  const dailyRate  = reservation.total_amount
-    ? Number(reservation.total_amount) / nights
-    : null
-  const subtotal   = dailyRate ? dailyRate * nights : null
-  const itbisAmt   = (subtotal && taxItbis)   ? subtotal * 0.18 : null
-  const airportAmt = (subtotal && taxAirport) ? subtotal * 0.10 : null
-  const digitalAmt = (subtotal && taxDigital) ? subtotal * 0.05 : null
-  const totalTaxes = (itbisAmt ?? 0) + (airportAmt ?? 0) + (digitalAmt ?? 0)
-  const totalUSD   = subtotal ? subtotal + totalTaxes : null
+  // Seguros: aceptado (✓ ACEPTAR) o declinado (✓ DECLINAR). En reservas antiguas sin decisión no se marca.
+  const insDecision = (key: string): 'a' | 'd' | '' => {
+    const l = bLine(key)
+    if (l?.checked) return 'a'
+    if (pricing.hasSavedBreakdown) return 'd'
+    const col = (reservation as Record<string, unknown>)[`insurance_${key}_accepted`]
+    return col === false ? 'd' : ''
+  }
+  const insPrice = (key: string) => {
+    const l = bLine(key)
+    return l && l.price > 0 ? `${fmtRD(l.price)}/DÍA` : ''
+  }
 
-  const fmtAmt = (n: number | null) => n != null ? `$${n.toFixed(2)}` : ''
+  // Datos del contrato: lo guardado en la reserva (los parámetros de URL antiguos solo como respaldo)
+  const ctFolio      = spFolio        || reservation.folio           || ''
+  const ctAprobacion = spAprobacion   || reservation.approval_number || ''
+  const ctPreparado  = spPreparadoPor || reservation.prepared_by     || ''
+  const pm = reservation.payment_method as string | null
+  const payCash = spPago ? spPago === 'efectivo' : pm === 'cash' || pm === 'mixed'
+  const payCard = spPago ? spPago === 'tarjeta'  : pm === 'card' || pm === 'mixed'
+  const ctD1Lic = spD1Lic || reservation.additional_driver_license  || ''
+  const ctD1Tel = spD1Tel || reservation.additional_driver_phone    || ''
+  const ctD2Lic = spD2Lic || reservation.additional_driver2_license || ''
+  const ctD2Tel = spD2Tel || reservation.additional_driver2_phone   || ''
+  const ctEdad  = spEdad  || (reservation.driver_age != null ? String(reservation.driver_age) : '')
+  const ctPets  = spMascotas || !!reservation.client_has_pets
+  const ctDeduct = deductBas || (reservation.insurance_deductible != null ? fmtRD(Number(reservation.insurance_deductible)) : '')
 
   const extraDriver = extras.find(e => e.extra_type === 'extra_driver')
 
@@ -362,15 +402,15 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     {/* Conductor adicional 1 */}
                     <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>CONDUCTOR ADICIONAL:</div>
                     <div className="grid2">
-                      <Field label="LICENCIA" value={spD1Lic} />
-                      <Field label="NUM. DE CONTACTO" value={spD1Tel} />
+                      <Field label="LICENCIA" value={ctD1Lic} />
+                      <Field label="NUM. DE CONTACTO" value={ctD1Tel} />
                     </div>
 
                     {/* Conductor adicional 2 */}
                     <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>CONDUCTOR ADICIONAL:</div>
                     <div className="grid2">
-                      <Field label="LICENCIA" value={spD2Lic} />
-                      <Field label="NUM. DE CONTACTO" value={spD2Tel} />
+                      <Field label="LICENCIA" value={ctD2Lic} />
+                      <Field label="NUM. DE CONTACTO" value={ctD2Tel} />
                     </div>
 
                     <Field label="DIRECCIÓN LOCAL" value={clientLocalAddress} />
@@ -419,27 +459,27 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                       <tr>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>FOLIO DEL DEPST.</div>
-                          <div style={{ minHeight: 12, fontSize: 9 }}>{spFolio}</div>
+                          <div style={{ minHeight: 12, fontSize: 9 }}>{ctFolio}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>NUM. DE APROB.</div>
-                          <div style={{ minHeight: 12, fontSize: 9 }}>{spAprobacion}</div>
+                          <div style={{ minHeight: 12, fontSize: 9 }}>{ctAprobacion}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>PREPARADO POR:</div>
-                          <div style={{ minHeight: 12, fontSize: 9 }}>{spPreparadoPor}</div>
+                          <div style={{ minHeight: 12, fontSize: 9 }}>{ctPreparado}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
                           <div style={{ fontSize: 7, fontWeight: 700 }}>FORMA DE PAGO:</div>
                           <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
                             <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}>
-                              <span className="box" style={{ width:8, height:8, background: spPago === 'efectivo' ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
-                                {spPago === 'efectivo' ? '✓' : ''}
+                              <span className="box" style={{ width:8, height:8, background: payCash ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
+                                {payCash ? '✓' : ''}
                               </span> EFECTIVO
                             </span>
                             <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}>
-                              <span className="box" style={{ width:8, height:8, background: spPago === 'tarjeta' ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
-                                {spPago === 'tarjeta' ? '✓' : ''}
+                              <span className="box" style={{ width:8, height:8, background: payCard ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
+                                {payCard ? '✓' : ''}
                               </span> TARJETA
                             </span>
                           </div>
@@ -464,8 +504,8 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                       <div style={{ gridColumn: 'span 1' }}>
                         <Field label="MODELO DEL VEHÍCULO" value={vehicle?.model} />
                       </div>
-                      <Field label="PRECIO POR DÍA" value="" />
-                      <Field label="CANTIDAD DE DÍAS" value={nights} />
+                      <Field label="PRECIO POR DÍA" value={fmtAmt(bd.daily_rate)} />
+                      <Field label="CANTIDAD DE DÍAS" value={pricing.days || nights} />
                     </div>
                     <div className="grid2">
                       <Field label="PLACA DEL VEHÍCULO" value={vehicle?.plates} />
@@ -479,7 +519,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     <Field label="FECHA ENTRADA DEL VEHÍCULO" value={fmt(reservation.end_date)} />
                     <div className="grid2">
                       <Field label="VEHÍCULO RETORNA EN LAS MISMAS CONDICIONES" value="" />
-                      <Field label="EDAD DEL CONDUCTOR" value={spEdad} />
+                      <Field label="EDAD DEL CONDUCTOR" value={ctEdad} />
                     </div>
                     <div className="grid2">
                       <Field label="REEMPLAZO DE VEHÍCULO MARCAR" value="" />
@@ -496,8 +536,8 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     <div className="grid2">
                       <Field label="FECHA ENTRADA (REEMPLAZO)" value="" />
                       <div style={{ fontSize: 7.5, display:'flex', alignItems:'center', gap:4 }}>
-                        <span className="box" style={{ background: spMascotas ? '#000' : '#fff', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
-                          {spMascotas ? '✓' : ''}
+                        <span className="box" style={{ background: ctPets ? '#000' : '#fff', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
+                          {ctPets ? '✓' : ''}
                         </span>
                         <span>CLIENTE TIENE MASCOTAS / PETS:</span>
                       </div>
@@ -507,15 +547,11 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     <div style={{ marginTop: 3 }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000' }}>
                         <tbody>
-                          <InsuranceRow label="SEGURO DE COLISIÓN — CDW:"                     price={priceCdw} status={segCdw} />
-                          <InsuranceRow label="SEG. DAÑOS A TERCEROS — LIABILITY:"            price={priceLia} status={segLia} />
-                          <InsuranceRow label="SEG. GOMAS Y CRISTALES — TIRES AND WINDSHIELD:" price={priceTw}  status={segTw}  />
-                          <InsuranceRow label="SEG. ANTI-ROBOS — ANTI-THEFT:"                 price={priceAt}  status={segAt}  />
-                          <InsuranceRow label="PAQUETE DE SEGUROS CDW / LIA / TW / AT:"       price={pricePkg} status={segPkg} />
+                          {INSURANCE_ITEMS.map(it => (
+                            <InsuranceRow key={it.key} label={`${it.label.toUpperCase()}:`} price={insPrice(it.key)} status={insDecision(it.key)} />
+                          ))}
                           <tr>
-                            <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '45%' }}>SEGURO BÁSICO — LIA / TW:</td>
-                            <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%' }}>PRECIO: {priceBas}</td>
-                            <td colSpan={2} style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}>DEDUCIBLE: {deductBas}</td>
+                            <td colSpan={4} style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc' }}>DEDUCIBLE DEL SEGURO: {ctDeduct}</td>
                           </tr>
                         </tbody>
                       </table>
@@ -524,17 +560,17 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     {/* Adicionales y totales */}
                     <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000', marginTop: 2 }}>
                       <tbody>
+                        {/* Extras de la reserva (mismos conceptos que Nueva reserva) */}
                         {[
-                          'TANQUE PRE-PAGO DE COMBUSTIBLE',
-                          'LAVADO DEL VEHÍCULO',
-                          'WIFI HOTSPOT',
-                          'UPGRADE DE VEHÍCULO',
-                          'CARGOS: LIMPIEZA PROFUNDA DEL VEHÍCULO',
-                          'CARGOS: DETALLE Y MISCELÁNEOS',
-                        ].map((item, i) => (
+                          ...EXTRA_ITEMS.map(it => [`ADICIONALES: ${it.label.toUpperCase()}`, fmtAmt(bLine(it.key)?.amount)]),
+                          ...(bLine('otros')?.checked ? [[`ADICIONALES: ${(bLine('otros')!.label).toUpperCase()}`, fmtAmt(bLine('otros')!.amount)]] : []),
+                          ['ADICIONALES: UPGRADE DE VEHÍCULO', ''],
+                          ['CARGOS: LIMPIEZA PROFUNDA DEL VEHÍCULO', ''],
+                          ['CARGOS: DETALLE Y MISCELÁNEOS', ''],
+                        ].map(([item, val], i) => (
                           <tr key={i}>
-                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>ADICIONALES: {item}</td>
-                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}/>
+                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>{item}</td>
+                            <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}>{val}</td>
                           </tr>
                         ))}
                         {extras.filter(e => !['extra_driver'].includes(e.extra_type)).map(e => (
@@ -548,11 +584,20 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                         {([
                           ['TASA DE CAMBIO: USD - RD', ''],
                           ['DEPÓSITO', ''],
-                          ['SUB-TOTAL', fmtAmt(subtotal)],
-                          ...(taxItbis   ? [['IMPUESTOS: ITBIS (18%)',            fmtAmt(itbisAmt)]]   : [['IMPUESTOS: ITBIS (   )', '']]),
-                          ...(taxAirport ? [['IMPUESTOS: AEROPORTUARIO (10%)',    fmtAmt(airportAmt)]] : [['IMPUESTOS: AIRPORT (   )', '']]),
-                          ...(taxDigital ? [['IMPUESTOS: PAGOS DIGITALES (5%)',   fmtAmt(digitalAmt)]] : []),
+                          [`RENTA (${bd.days} DÍA${bd.days !== 1 ? 'S' : ''} × ${fmtRD(bd.daily_rate)})`, fmtAmt(bd.rental_subtotal)],
+                          ['SEGUROS', fmtAmt(bd.insurance_total)],
+                          ['ADICIONALES', fmtAmt(bd.extras_total)],
+                          ['SUB-TOTAL', fmtAmt(bd.subtotal)],
+                          ...TAX_ITEMS.map(it => {
+                            const l = bLine(it.key)
+                            const rate = l?.checked ? (it.kind === 'pct' ? ` (${l.price}%)` : '') : ' (   )'
+                            return [`IMPUESTOS: ${it.label.toUpperCase()}${rate}`, l?.checked ? fmtRD(l.amount) : '']
+                          }),
+                          ...(pricing.adjustment ? [['AJUSTES (CAMBIO DE FECHA / VEHÍCULO)', fmtRD(pricing.adjustment)]] : []),
                           ['DESCUENTOS', ''],
+                          ...(cashPaid > 0 ? [['ABONO EN EFECTIVO', fmtRD(cashPaid)]] : []),
+                          ...(cardPaid > 0 ? [['ABONO CON TARJETA', fmtRD(cardPaid)]] : []),
+                          ...(cashPaid + cardPaid > 0 ? [['BALANCE PENDIENTE', fmtRD(balance)]] : []),
                         ] as [string, string][]).map(([label, val], i) => (
                           <tr key={`t${i}`}>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>{label}</td>
@@ -561,11 +606,11 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                         ))}
                         <tr>
                           <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN DÓLARES (USD):</td>
-                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmtAmt(totalUSD)}</td>
+                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}/>
                         </tr>
                         <tr>
                           <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN PESOS (RD):</td>
-                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}/>
+                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmtRD(pricing.total)}</td>
                         </tr>
                       </tbody>
                     </table>

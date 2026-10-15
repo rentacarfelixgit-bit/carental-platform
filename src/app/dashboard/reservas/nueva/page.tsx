@@ -3,9 +3,10 @@
 
 import NuevaReservaForm from './NuevaReservaForm'
 import { loadRentalFormData } from './loadFormData'
+import { parseCalendarReturn } from '@/lib/calendarReturn'
 
 interface Props {
-  searchParams: Promise<{ start?: string; end?: string; vehicle?: string }>
+  searchParams: Promise<{ start?: string; end?: string; vehicle?: string; from?: string; mes?: string; dia?: string; vista?: string }>
 }
 
 // Convertir fecha sola (YYYY-MM-DD) a datetime-local (YYYY-MM-DDTHH:MM)
@@ -17,7 +18,8 @@ function toDatetime(val?: string, defaultTime = '08:00') {
 }
 
 export default async function NuevaReservaPage({ searchParams }: Props) {
-  const { start, end, vehicle } = await searchParams
+  const sp = await searchParams
+  const { start, end, vehicle } = sp
   const { clients, defaultPrices } = await loadRentalFormData()
 
   return (
@@ -27,6 +29,7 @@ export default async function NuevaReservaPage({ searchParams }: Props) {
       initialEndDate={toDatetime(end, '08:00')}
       initialVehicleId={vehicle ?? ''}
       defaultPrices={defaultPrices}
+      calendarReturn={parseCalendarReturn(sp)}
     />
   )
 }
