@@ -1,51 +1,146 @@
 // src/lib/reservationPrices.ts
-// Catálogo de seguros, extras e impuestos de la reserva y sus precios por defecto.
-// Los precios por defecto los define el admin en Configuración y se guardan en
-// tenants.settings.reservation_prices. En la reserva se precargan y se pueden modificar.
+// Catálogo de seguros, extras e impuestos de las rentas y sus precios por defecto (en US$).
+//
+// - Conceptos base (los de siempre) + conceptos que cada negocio crea en Configuración.
+// - Se guarda en tenants.settings:
+//     reservation_prices: { [key]: precio }           ← precio por defecto de cada concepto
+//     price_catalog: { custom: [...], hidden: [...] } ← conceptos creados y conceptos base ocultos
+// - Cada renta guarda su desglose (reservations.price_breakdown) con nombre, tipo y precio de cada
+//   concepto, así el contrato se imprime igual aunque después se renombre u oculte un concepto.
 
 export type PriceKind = 'per_day' | 'flat' | 'pct'
+export type PriceGroup = 'insurance' | 'extra' | 'tax'
 
 export interface PriceItem {
   key: string
   label: string
   kind: PriceKind
+  group: PriceGroup
   /** Valor si el admin aún no ha configurado uno */
   fallback: number
+  /** Creado por el negocio en Configuración */
+  custom?: boolean
 }
 
 export const INSURANCE_ITEMS: PriceItem[] = [
-  { key: 'cdw', label: 'Seg. de Colisión / CDW',          kind: 'per_day', fallback: 0 },
-  { key: 'lia', label: 'Seg. Daños a 3eros / Liability',  kind: 'per_day', fallback: 0 },
-  { key: 'tw',  label: 'Seg. Gomas y Cristales / TAW',    kind: 'per_day', fallback: 0 },
-  { key: 'at',  label: 'Seg. Anti-Robo / Anti-Theft',     kind: 'per_day', fallback: 0 },
-  { key: 'pkg', label: 'Paq. Básico de Seg. / Lia+TAW',   kind: 'per_day', fallback: 0 },
+  { key: 'cdw', group: 'insurance', label: 'Seg. de Colisión / CDW',          kind: 'per_day', fallback: 0 },
+  { key: 'lia', group: 'insurance', label: 'Seg. Daños a 3eros / Liability',  kind: 'per_day', fallback: 0 },
+  { key: 'tw',  group: 'insurance', label: 'Seg. Gomas y Cristales / TAW',    kind: 'per_day', fallback: 0 },
+  { key: 'at',  group: 'insurance', label: 'Seg. Anti-Robo / Anti-Theft',     kind: 'per_day', fallback: 0 },
+  { key: 'pkg', group: 'insurance', label: 'Paq. Básico de Seg. / Lia+TAW',   kind: 'per_day', fallback: 0 },
 ]
 
 export const EXTRA_ITEMS: PriceItem[] = [
-  { key: 'fuel',    label: 'Combustible / Prepay Gas Tank',     kind: 'flat', fallback: 0 },
-  { key: 'carwash', label: 'Lavado del Vehículo / Car Wash',    kind: 'flat', fallback: 7 },
-  { key: 'wifi',    label: 'Cajita de Internet / WiFi Hotspot', kind: 'flat', fallback: 7 },
-  { key: 'carseat', label: 'Silla de Bebé / Car Seat',          kind: 'flat', fallback: 7 },
+  { key: 'fuel',    group: 'extra', label: 'Combustible / Prepay Gas Tank',     kind: 'flat', fallback: 0 },
+  { key: 'carwash', group: 'extra', label: 'Lavado del Vehículo / Car Wash',    kind: 'flat', fallback: 7 },
+  { key: 'wifi',    group: 'extra', label: 'Cajita de Internet / WiFi Hotspot', kind: 'flat', fallback: 7 },
+  { key: 'carseat', group: 'extra', label: 'Silla de Bebé / Car Seat',          kind: 'flat', fallback: 7 },
 ]
 
 export const TAX_ITEMS: PriceItem[] = [
-  { key: 'vlf',     label: 'Impuesto de Tránsito / VLF', kind: 'flat', fallback: 5 },
-  { key: 'airport', label: 'Impuesto Aeroportuario',     kind: 'pct',  fallback: 10 },
-  { key: 'itbis',   label: 'Impuesto / ITBIS',           kind: 'pct',  fallback: 18 },
+  { key: 'vlf',     group: 'tax', label: 'Impuesto de Tránsito / VLF', kind: 'flat', fallback: 5 },
+  { key: 'airport', group: 'tax', label: 'Impuesto Aeroportuario',     kind: 'pct',  fallback: 10 },
+  { key: 'itbis',   group: 'tax', label: 'Impuesto / ITBIS',           kind: 'pct',  fallback: 18 },
 ]
 
-export const ALL_PRICE_ITEMS: PriceItem[] = [...INSURANCE_ITEMS, ...EXTRA_ITEMS, ...TAX_ITEMS]
+/** Conceptos base del sistema */
+export const BUILTIN_ITEMS: PriceItem[] = [...INSURANCE_ITEMS, ...EXTRA_ITEMS, ...TAX_ITEMS]
+/** @deprecated usar el catálogo del negocio (getPriceCatalog). Se conserva por compatibilidad. */
+export const ALL_PRICE_ITEMS: PriceItem[] = BUILTIN_ITEMS
+
+/** Tipos permitidos por grupo (lo que ofrece Configuración al crear un concepto) */
+export const KINDS_BY_GROUP: Record<PriceGroup, PriceKind[]> = {
+  insurance: ['per_day', 'flat'],
+  extra:     ['flat', 'per_day'],
+  tax:       ['pct', 'flat'],
+}
+export const KIND_LABEL: Record<PriceKind, string> = {
+  per_day: 'Por día', flat: 'Cargo único', pct: 'Porcentaje',
+}
+export const GROUP_LABEL: Record<PriceGroup, string> = {
+  insurance: 'Seguros', extra: 'Extras', tax: 'Impuestos',
+}
+
+export const MAX_CUSTOM_ITEMS = 40
+export const CUSTOM_KEY_RE = /^c_[a-z0-9]{4,16}$/
 
 export type ReservationPrices = Record<string, number>
 
-/** Combina lo guardado en tenants.settings con los valores de respaldo. */
-export function getReservationPrices(settings: unknown): ReservationPrices {
-  const saved = (settings && typeof settings === 'object'
-    ? (settings as Record<string, unknown>).reservation_prices
-    : null) as Record<string, unknown> | null
+/** Conceptos creados por el negocio (tal como se guardan en settings.price_catalog.custom) */
+export interface CustomPriceItem { key: string; group: PriceGroup; label: string; kind: PriceKind }
 
+export interface PriceCatalog {
+  insurance: PriceItem[]
+  extra: PriceItem[]
+  tax: PriceItem[]
+  /** Todos, en orden: seguros, extras, impuestos */
+  all: PriceItem[]
+}
+
+const isGroup = (g: unknown): g is PriceGroup => g === 'insurance' || g === 'extra' || g === 'tax'
+const isKind  = (k: unknown): k is PriceKind  => k === 'per_day' || k === 'flat' || k === 'pct'
+
+function settingsObj(settings: unknown): Record<string, unknown> {
+  return settings && typeof settings === 'object' ? settings as Record<string, unknown> : {}
+}
+
+/** Conceptos creados por el negocio, validados */
+export function getCustomItems(settings: unknown): CustomPriceItem[] {
+  const cat = settingsObj(settings).price_catalog as Record<string, unknown> | undefined
+  const raw = Array.isArray(cat?.custom) ? cat!.custom as unknown[] : []
+  const out: CustomPriceItem[] = []
+  for (const r of raw) {
+    const o = r as Partial<CustomPriceItem>
+    if (!o || typeof o.key !== 'string' || !CUSTOM_KEY_RE.test(o.key)) continue
+    if (!isGroup(o.group) || !isKind(o.kind) || !KINDS_BY_GROUP[o.group].includes(o.kind)) continue
+    const label = String(o.label ?? '').trim().slice(0, 80)
+    if (!label) continue
+    out.push({ key: o.key, group: o.group, label, kind: o.kind })
+  }
+  return out.slice(0, MAX_CUSTOM_ITEMS)
+}
+
+/** Conceptos base que el negocio eliminó (no aparecen en ningún lado; se pueden restaurar) */
+export function getDeletedKeys(settings: unknown): string[] {
+  const cat = settingsObj(settings).price_catalog as Record<string, unknown> | undefined
+  const raw = Array.isArray(cat?.deleted) ? cat!.deleted as unknown[] : []
+  return raw.filter((k): k is string => typeof k === 'string' && BUILTIN_ITEMS.some(b => b.key === k))
+}
+
+/** Conceptos que el negocio ocultó (del sistema o propios) */
+export function getHiddenKeys(settings: unknown): string[] {
+  const cat = settingsObj(settings).price_catalog as Record<string, unknown> | undefined
+  const raw = Array.isArray(cat?.hidden) ? cat!.hidden as unknown[] : []
+  const customKeys = new Set(getCustomItems(settings).map(c => c.key))
+  return raw.filter((k): k is string => typeof k === 'string' && (BUILTIN_ITEMS.some(b => b.key === k) || customKeys.has(k)))
+}
+
+export function groupCatalog(items: PriceItem[]): PriceCatalog {
+  const insurance = items.filter(i => i.group === 'insurance')
+  const extra     = items.filter(i => i.group === 'extra')
+  const tax       = items.filter(i => i.group === 'tax')
+  return { insurance, extra, tax, all: [...insurance, ...extra, ...tax] }
+}
+
+/**
+ * Catálogo del negocio: conceptos base (menos los ocultos) + los creados en Configuración.
+ * includeHidden = true lo usa Configuración para poder volver a mostrarlos.
+ */
+export function getPriceCatalog(settings: unknown, opts: { includeHidden?: boolean } = {}): PriceCatalog {
+  const hidden = new Set(getHiddenKeys(settings))
+  const deleted = new Set(getDeletedKeys(settings))
+  const builtins = BUILTIN_ITEMS.filter(i => !deleted.has(i.key) && (opts.includeHidden || !hidden.has(i.key)))
+  const custom: PriceItem[] = getCustomItems(settings)
+    .filter(c => opts.includeHidden || !hidden.has(c.key))
+    .map(c => ({ ...c, fallback: 0, custom: true }))
+  return groupCatalog([...builtins, ...custom])
+}
+
+/** Precios por defecto de todos los conceptos del negocio (base + creados) */
+export function getReservationPrices(settings: unknown): ReservationPrices {
+  const saved = settingsObj(settings).reservation_prices as Record<string, unknown> | null | undefined
   const out: ReservationPrices = {}
-  for (const item of ALL_PRICE_ITEMS) {
+  for (const item of getPriceCatalog(settings, { includeHidden: true }).all) {
     const raw = saved?.[item.key]
     const v = raw === undefined || raw === null || raw === '' ? NaN : Number(raw)
     out[item.key] = Number.isFinite(v) && v >= 0 ? v : item.fallback
@@ -53,6 +148,12 @@ export function getReservationPrices(settings: unknown): ReservationPrices {
   return out
 }
 
+/** Une catálogos sin repetir conceptos (el primero manda). Sirve para que una renta conserve
+ *  conceptos que ya no están en el catálogo actual del negocio. */
+export function mergeCatalog(primary: PriceItem[], extra: PriceItem[]): PriceCatalog {
+  const seen = new Set(primary.map(i => i.key))
+  return groupCatalog([...primary, ...extra.filter(i => !seen.has(i.key))])
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Desglose de precios de una renta
@@ -60,7 +161,7 @@ export function getReservationPrices(settings: unknown): ReservationPrices {
 // en reservations.price_breakdown para que el contrato muestre exactamente lo mismo.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type BreakdownGroup = 'insurance' | 'extra' | 'tax' | 'other'
+export type BreakdownGroup = PriceGroup | 'other'
 
 export interface BreakdownLine {
   key: string
@@ -82,7 +183,7 @@ export interface PriceBreakdown {
   rental_subtotal: number
   insurance_total: number
   extras_total: number
-  /** Base de impuestos: renta + seguros + extras + otros */
+  /** Renta + seguros + extras + otros */
   subtotal: number
   taxes_total: number
   total: number
@@ -99,25 +200,32 @@ export interface PriceSelection {
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 
-/** Cálculo único de la renta. Impuestos %: sobre renta + seguros (igual que Nueva reserva). */
-export function computeBreakdown(sel: PriceSelection): PriceBreakdown {
+/**
+ * Cálculo único de la renta.
+ * Seguros y extras: por día (precio × días) o cargo único. Impuestos: porcentaje sobre
+ * renta + seguros (igual que siempre), cargo único o por día.
+ */
+export function computeBreakdown(sel: PriceSelection, items: PriceItem[] = BUILTIN_ITEMS): PriceBreakdown {
   const days = Math.max(0, Math.floor(sel.days))
   const dailyRate = Math.max(0, sel.dailyRate || 0)
   const price = (k: string) => Math.max(0, Number(sel.prices[k]) || 0)
   const rental = dailyRate * days
+  const cat = groupCatalog(items)
   const lines: BreakdownLine[] = []
+  const amountOf = (it: PriceItem, base: number) =>
+    it.kind === 'per_day' ? price(it.key) * days : it.kind === 'pct' ? base * (price(it.key) / 100) : price(it.key)
 
   let insurance = 0
-  for (const it of INSURANCE_ITEMS) {
+  for (const it of cat.insurance) {
     const checked = !!sel.checked[it.key]
-    const amount = checked ? price(it.key) * days : 0
+    const amount = checked ? amountOf(it, 0) : 0
     insurance += amount
     lines.push({ key: it.key, group: 'insurance', label: it.label, kind: it.kind, price: price(it.key), checked, amount: r2(amount) })
   }
   let extras = 0
-  for (const it of EXTRA_ITEMS) {
+  for (const it of cat.extra) {
     const checked = !!sel.checked[it.key]
-    const amount = checked ? price(it.key) : 0
+    const amount = checked ? amountOf(it, 0) : 0
     extras += amount
     lines.push({ key: it.key, group: 'extra', label: it.label, kind: it.kind, price: price(it.key), checked, amount: r2(amount) })
   }
@@ -129,9 +237,9 @@ export function computeBreakdown(sel: PriceSelection): PriceBreakdown {
   }
   const taxBase = rental + insurance
   let taxes = 0
-  for (const it of TAX_ITEMS) {
+  for (const it of cat.tax) {
     const checked = !!sel.checked[it.key]
-    const amount = checked ? (it.kind === 'pct' ? taxBase * (price(it.key) / 100) : price(it.key)) : 0
+    const amount = checked ? amountOf(it, taxBase) : 0
     taxes += amount
     lines.push({ key: it.key, group: 'tax', label: it.label, kind: it.kind, price: price(it.key), checked, amount: r2(amount) })
   }
@@ -143,6 +251,13 @@ export function computeBreakdown(sel: PriceSelection): PriceBreakdown {
     total: r2(rental + insurance + extras + taxes),
     lines,
   }
+}
+
+/** Conceptos (con nombre y tipo) tal como quedaron guardados en un desglose */
+export function catalogFromBreakdown(b: PriceBreakdown): PriceItem[] {
+  return b.lines
+    .filter(l => l.key !== 'otros' && l.group !== 'other')
+    .map(l => ({ key: l.key, label: l.label, kind: l.kind, group: l.group as PriceGroup, fallback: 0 }))
 }
 
 /** Selección (marcados y precios) a partir de un desglose guardado, para volver a editarlo. */
@@ -158,26 +273,37 @@ export function selectionFromBreakdown(b: PriceBreakdown, days = b.days): PriceS
   return { days, dailyRate: b.daily_rate, checked, prices, otros }
 }
 
-/** Valida y normaliza un desglose que viene de la base de datos o de un formulario. */
+/**
+ * Valida y normaliza un desglose que viene de la base de datos o de un formulario.
+ * Conserva los conceptos con su nombre y tipo, pero recalcula todos los importes:
+ * nunca se confía en los montos que vienen de fuera.
+ */
 export function parseBreakdown(raw: unknown): PriceBreakdown | null {
   let obj = raw
   if (typeof raw === 'string') { try { obj = JSON.parse(raw) } catch { return null } }
   if (!obj || typeof obj !== 'object') return null
   const o = obj as Partial<PriceBreakdown>
   if (o.v !== 1 || !Array.isArray(o.lines)) return null
-  // Se recalcula con el catálogo actual: nunca se confía en los importes que vienen de fuera
+
   const sel: PriceSelection = { days: Number(o.days) || 0, dailyRate: Number(o.daily_rate) || 0, checked: {}, prices: {} }
-  for (const l of o.lines as Partial<BreakdownLine>[]) {
-    if (!l || typeof l.key !== 'string') continue
+  const items: PriceItem[] = []
+  const seen = new Set<string>()
+  for (const l of (o.lines as Partial<BreakdownLine>[]).slice(0, 80)) {
+    if (!l || typeof l.key !== 'string' || !/^[a-z0-9_]{1,40}$/.test(l.key) || seen.has(l.key)) continue
+    seen.add(l.key)
     if (l.key === 'otros') {
-      sel.otros = { label: String(l.label ?? 'Otros'), price: Number(l.price) || 0, checked: !!l.checked }
+      sel.otros = { label: String(l.label ?? 'Otros').slice(0, 80), price: Number(l.price) || 0, checked: !!l.checked }
       continue
     }
-    if (!ALL_PRICE_ITEMS.some(i => i.key === l.key)) continue
+    if (!isGroup(l.group) || !isKind(l.kind)) continue
+    const builtin = BUILTIN_ITEMS.find(b => b.key === l.key)
+    const label = String(l.label ?? builtin?.label ?? '').trim().slice(0, 80)
+    if (!label) continue
+    items.push({ key: l.key, group: l.group, kind: l.kind, label, fallback: 0 })
     sel.checked[l.key] = !!l.checked
     sel.prices[l.key] = Number(l.price) || 0
   }
-  return computeBreakdown(sel)
+  return computeBreakdown(sel, items)
 }
 
 /** Para reservas anteriores al desglose: lo arma con las columnas de seguros que sí existían. */
@@ -233,8 +359,9 @@ type BreakdownSource = {
 }
 
 /**
- * Desglose vigente de una renta: el guardado, recalculado con los días actuales (si se extendió la
- * renta, los conceptos por día se ajustan solos). Para reservas antiguas se arma con las columnas.
+ * Desglose vigente de una renta: el guardado (con sus conceptos tal como se eligieron),
+ * recalculado con los días actuales (si se extendió la renta, los conceptos por día se ajustan
+ * solos). Para reservas antiguas se arma con las columnas.
  * `adjustment` = diferencia entre el total guardado y el desglose (p. ej. cambio de vehículo o un
  * total editado a mano al extender), para que el contrato cuadre con el total de la reserva.
  */
@@ -244,7 +371,7 @@ export function resolveBreakdown(r: BreakdownSource) {
   const total = r.total_amount != null ? Number(r.total_amount) : null
   const n = (v: number | string | null | undefined) => v == null ? null : Number(v)
   const breakdown = saved
-    ? computeBreakdown({ ...selectionFromBreakdown(saved), days })
+    ? computeBreakdown({ ...selectionFromBreakdown(saved), days }, catalogFromBreakdown(saved))
     : legacyBreakdown({
         days, daily_rate: n(r.daily_rate), total_amount: total,
         insurance: {

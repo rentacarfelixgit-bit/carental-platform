@@ -3,7 +3,8 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { rentalFolio } from '@/lib/rentalLabels'
-import { BREAKDOWN_SELECT, resolveBreakdown, INSURANCE_ITEMS, EXTRA_ITEMS, TAX_ITEMS } from '@/lib/reservationPrices'
+import { BREAKDOWN_SELECT, resolveBreakdown } from '@/lib/reservationPrices'
+import { fmtUSD, fmtLocal, fmtRate, fmtPayment, toLocal, paymentToUSD, rentalRate, getCurrencySettings } from '@/lib/currency'
 import { EQUIPMENT_CONDITION, EQUIPMENT_TYPES, type EquipmentCondition, type EquipmentType } from '@/lib/equipment'
 import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
 import { redirect } from 'next/navigation'
@@ -137,6 +138,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
       ${BREAKDOWN_SELECT},
       folio, approval_number, prepared_by, driver_age, client_has_pets, insurance_deductible,
       additional_driver_license, additional_driver_phone, additional_driver2_license, additional_driver2_phone,
+      exchange_rate, cash_payment_currency, card_payment_currency,
       clients ( id, full_name, id_type, id_number, license_number, license_expiry, passport_number, phone, email, address, city, state, zip_code, local_phone, local_address ),
       vehicles ( id, plates, brand, model, year, color, vin ),
       reservation_extras ( id, extra_type, description )
@@ -252,7 +254,8 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
     const o = (Array.isArray(v) ? v[0] : v) as { brand: string; model: string; plates: string } | null
     return o ? `${o.brand} ${o.model} · ${o.plates}` : '—'
   }
-  const fmtRD = (n: number) => `RD$${n.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  // Todos los montos en US$; la moneda local solo en la tasa y el total final
+  const fmtMoney = (n: number) => fmtUSD(n)
   const fmtDT = (d: string) => new Date(d).toLocaleString('es-DO', { dateStyle: 'short', timeStyle: 'short' })
 
   // Folio consecutivo: R-0001 (reserva) o C-0001 (contrato de mostrador). El PDF siempre dice "Contrato".
@@ -270,12 +273,20 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const pricing = resolveBreakdown(reservation)
   const bd = pricing.breakdown
   const bLine = (key: string) => bd.lines.find(l => l.key === key)
-  const fmtAmt = (n: number | null | undefined) => n != null && n > 0 ? fmtRD(n) : ''
+  const fmtAmt = (n: number | null | undefined) => n != null && n > 0 ? fmtMoney(n) : ''
+  const cur      = getCurrencySettings(tenant?.settings)
+  const fxRate   = rentalRate(reservation.exchange_rate, cur)
   const cashPaid = Number(reservation.cash_payment) || 0
   const cardPaid = Number(reservation.card_payment) || 0
-  const balance  = pricing.total - cashPaid - cardPaid
+  const paidUSD  = paymentToUSD(cashPaid, reservation.cash_payment_currency, fxRate) + paymentToUSD(cardPaid, reservation.card_payment_currency, fxRate)
+  const balance  = pricing.total - paidUSD
+  const totalLocal = toLocal(pricing.total, fxRate)
 
   // Seguros: aceptado (✓ ACEPTAR) o declinado (✓ DECLINAR). En reservas antiguas sin decisión no se marca.
+  // Conceptos de ESTA renta tal como se eligieron (incluye los creados en Configuración)
+  const insLines   = bd.lines.filter(l => l.group === 'insurance')
+  const extraLines = bd.lines.filter(l => l.group === 'extra')
+  const taxLines   = bd.lines.filter(l => l.group === 'tax')
   const insDecision = (key: string): 'a' | 'd' | '' => {
     const l = bLine(key)
     if (l?.checked) return 'a'
@@ -285,7 +296,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   }
   const insPrice = (key: string) => {
     const l = bLine(key)
-    return l && l.price > 0 ? `${fmtRD(l.price)}/DÍA` : ''
+    return l && l.price > 0 ? `${fmtMoney(l.price)}${l.kind === 'per_day' ? '/DÍA' : ''}` : ''
   }
 
   // Datos del contrato: lo guardado en la reserva (los parámetros de URL antiguos solo como respaldo)
@@ -301,7 +312,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const ctD2Tel = spD2Tel || reservation.additional_driver2_phone   || ''
   const ctEdad  = spEdad  || (reservation.driver_age != null ? String(reservation.driver_age) : '')
   const ctPets  = spMascotas || !!reservation.client_has_pets
-  const ctDeduct = deductBas || (reservation.insurance_deductible != null ? fmtRD(Number(reservation.insurance_deductible)) : '')
+  const ctDeduct = deductBas || (reservation.insurance_deductible != null ? fmtMoney(Number(reservation.insurance_deductible)) : '')
 
   const extraDriver = extras.find(e => e.extra_type === 'extra_driver')
 
@@ -547,7 +558,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     <div style={{ marginTop: 3 }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000' }}>
                         <tbody>
-                          {INSURANCE_ITEMS.map(it => (
+                          {insLines.map(it => (
                             <InsuranceRow key={it.key} label={`${it.label.toUpperCase()}:`} price={insPrice(it.key)} status={insDecision(it.key)} />
                           ))}
                           <tr>
@@ -562,7 +573,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                       <tbody>
                         {/* Extras de la reserva (mismos conceptos que Nueva reserva) */}
                         {[
-                          ...EXTRA_ITEMS.map(it => [`ADICIONALES: ${it.label.toUpperCase()}`, fmtAmt(bLine(it.key)?.amount)]),
+                          ...extraLines.map(it => [`ADICIONALES: ${it.label.toUpperCase()}${it.checked && it.kind === 'per_day' ? ` (${bd.days} DÍA${bd.days !== 1 ? 'S' : ''} × ${fmtMoney(it.price)})` : ''}`, fmtAmt(it.amount)]),
                           ...(bLine('otros')?.checked ? [[`ADICIONALES: ${(bLine('otros')!.label).toUpperCase()}`, fmtAmt(bLine('otros')!.amount)]] : []),
                           ['ADICIONALES: UPGRADE DE VEHÍCULO', ''],
                           ['CARGOS: LIMPIEZA PROFUNDA DEL VEHÍCULO', ''],
@@ -582,22 +593,22 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                           </tr>
                         ))}
                         {([
-                          ['TASA DE CAMBIO: USD - RD', ''],
+                          [`TASA DE CAMBIO: USD - ${cur.localCode}`, fxRate > 0 ? fmtRate(fxRate, cur.localSymbol) : ''],
                           ['DEPÓSITO', ''],
-                          [`RENTA (${bd.days} DÍA${bd.days !== 1 ? 'S' : ''} × ${fmtRD(bd.daily_rate)})`, fmtAmt(bd.rental_subtotal)],
+                          [`RENTA (${bd.days} DÍA${bd.days !== 1 ? 'S' : ''} × ${fmtMoney(bd.daily_rate)})`, fmtAmt(bd.rental_subtotal)],
                           ['SEGUROS', fmtAmt(bd.insurance_total)],
                           ['ADICIONALES', fmtAmt(bd.extras_total)],
                           ['SUB-TOTAL', fmtAmt(bd.subtotal)],
-                          ...TAX_ITEMS.map(it => {
+                          ...taxLines.map(it => {
                             const l = bLine(it.key)
                             const rate = l?.checked ? (it.kind === 'pct' ? ` (${l.price}%)` : '') : ' (   )'
-                            return [`IMPUESTOS: ${it.label.toUpperCase()}${rate}`, l?.checked ? fmtRD(l.amount) : '']
+                            return [`IMPUESTOS: ${it.label.toUpperCase()}${rate}`, l?.checked ? fmtMoney(l.amount) : '']
                           }),
-                          ...(pricing.adjustment ? [['AJUSTES (CAMBIO DE FECHA / VEHÍCULO)', fmtRD(pricing.adjustment)]] : []),
+                          ...(pricing.adjustment ? [['AJUSTES (CAMBIO DE FECHA / VEHÍCULO)', fmtMoney(pricing.adjustment)]] : []),
                           ['DESCUENTOS', ''],
-                          ...(cashPaid > 0 ? [['ABONO EN EFECTIVO', fmtRD(cashPaid)]] : []),
-                          ...(cardPaid > 0 ? [['ABONO CON TARJETA', fmtRD(cardPaid)]] : []),
-                          ...(cashPaid + cardPaid > 0 ? [['BALANCE PENDIENTE', fmtRD(balance)]] : []),
+                          ...(cashPaid > 0 ? [['ABONO EN EFECTIVO', fmtPayment(cashPaid, reservation.cash_payment_currency, cur)]] : []),
+                          ...(cardPaid > 0 ? [['ABONO CON TARJETA', fmtPayment(cardPaid, reservation.card_payment_currency, cur)]] : []),
+                          ...(cashPaid + cardPaid > 0 ? [['BALANCE PENDIENTE', `${fmtMoney(balance)}${fxRate > 0 ? ` (${fmtLocal(toLocal(balance, fxRate), cur.localSymbol)})` : ''}`]] : []),
                         ] as [string, string][]).map(([label, val], i) => (
                           <tr key={`t${i}`}>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>{label}</td>
@@ -606,11 +617,11 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                         ))}
                         <tr>
                           <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN DÓLARES (USD):</td>
-                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}/>
+                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmtMoney(pricing.total)}</td>
                         </tr>
                         <tr>
-                          <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN PESOS (RD):</td>
-                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmtRD(pricing.total)}</td>
+                          <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN {cur.localName.toUpperCase()} ({cur.localCode}):</td>
+                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{totalLocal != null ? fmtLocal(totalLocal, cur.localSymbol) : ''}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -911,7 +922,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                             {sw.keep_price
                               ? 'SIN CAMBIO DE PRECIO'
                               : <>{sw.days_used} DÍA(S) TARIFA ORIGINAL · {sw.days_remaining} DÍA(S) TARIFA NUEVA<br />
-                                  TOTAL {sw.old_total != null ? fmtRD(Number(sw.old_total)) : '—'} → {sw.new_total != null ? fmtRD(Number(sw.new_total)) : '—'}</>}
+                                  TOTAL {sw.old_total != null ? fmtMoney(Number(sw.old_total)) : '—'} → {sw.new_total != null ? fmtMoney(Number(sw.new_total)) : '—'}</>}
                           </td>
                         </tr>
                       )
@@ -975,12 +986,12 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700 }}>{c.concept}</td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>{c.reason}</td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 7.5 }}>{oneName(c.creator)}</td>
-                        <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, textAlign: 'right', whiteSpace: 'nowrap' }}>{fmtRD(Number(c.amount))}</td>
+                        <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, textAlign: 'right', whiteSpace: 'nowrap' }}>{fmtMoney(Number(c.amount))}</td>
                       </tr>
                     ))}
                     <tr>
                       <td colSpan={4} style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700, textAlign: 'right' }}>TOTAL CARGOS ADICIONALES:</td>
-                      <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700, textAlign: 'right' }}>{fmtRD(annexChargesTotal)}</td>
+                      <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700, textAlign: 'right' }}>{fmtMoney(annexChargesTotal)}</td>
                     </tr>
                   </tbody>
                 </table>

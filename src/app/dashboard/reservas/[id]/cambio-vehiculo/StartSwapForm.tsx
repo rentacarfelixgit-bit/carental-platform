@@ -7,9 +7,10 @@ import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { listSwapCandidates, previewVehicleSwap, startVehicleSwap, type SwapCandidate } from './actions'
 import { SWAP_REASONS, SWAP_REASON_KEYS, type SwapQuote, type SwapReason } from '@/lib/vehicleSwap'
+import { fmtUSD } from '@/lib/currency'
 
 const money = (n: number | null | undefined) =>
-  n == null ? '—' : `RD$${n.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  fmtUSD(n)
 const inputCls = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50'
 
 export default function StartSwapForm({ reservationId, currentVehicle }: { reservationId: string; currentVehicle: string }) {
@@ -130,7 +131,7 @@ export default function StartSwapForm({ reservationId, currentVehicle }: { reser
               </div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Total a cobrar</label>
               <div className="flex items-center gap-1.5">
-                <span className="text-xs text-gray-500">RD$</span>
+                <span className="text-xs text-gray-500">US$</span>
                 <input type="text" inputMode="decimal" value={total} disabled={pending}
                   onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d{0,2}$/.test(v)) { setTotal(v); setTotalTouched(true) } }}
                   className={inputCls} />

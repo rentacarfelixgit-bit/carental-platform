@@ -20,9 +20,14 @@ export default async function DashboardLayout({
 
   const { data: profile } = await supabase
     .from('users')
-    .select('full_name, role, tenant_id')
+    .select('full_name, role, tenant_id, active')
     .eq('id', user.id)
     .single()
+
+  // Usuario desactivado o eliminado: cerrar su sesión
+  if (!profile || profile.active === false) {
+    redirect('/auth/signout?motivo=inactivo')
+  }
 
 
   const userName = profile?.full_name ?? user.email ?? 'Usuario'

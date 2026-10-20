@@ -7,8 +7,10 @@ import { redirect } from 'next/navigation'
 import StatusBadge from '../StatusBadge'
 import ReservationActions from './ReservationActions'
 import ContratoButton from './ContratoButton'
+import AuditHistoryLink from '@/components/dashboard/AuditHistoryLink'
 import { rentalFolio, rentalSection, rentalTitle } from '@/lib/rentalLabels'
-import { BREAKDOWN_SELECT, resolveBreakdown, getReservationPrices } from '@/lib/reservationPrices'
+import { BREAKDOWN_SELECT, resolveBreakdown, getReservationPrices, getPriceCatalog, catalogFromBreakdown, mergeCatalog } from '@/lib/reservationPrices'
+import { fmtUSD, fmtLocal, fmtRate, fmtPayment, toLocal, paymentToUSD, rentalRate, getCurrencySettings } from '@/lib/currency'
 import { parseCalendarReturn, calendarHref } from '@/lib/calendarReturn'
 import RentalEvents from '../calendario/RentalEvents'
 import ChangeReturnDateButton from './ChangeReturnDateButton'
@@ -68,7 +70,8 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
         reservation_extras ( id, extra_type, description )`
       const contractCols = `${BREAKDOWN_SELECT},
         folio, approval_number, prepared_by, driver_age, client_has_pets, insurance_deductible,
-        additional_driver_license, additional_driver_phone, additional_driver2_license, additional_driver2_phone`
+        additional_driver_license, additional_driver_phone, additional_driver2_license, additional_driver2_phone,
+        exchange_rate, cash_payment_currency, card_payment_currency`
       const q = (cols: string) => supabase.from('reservations').select(cols)
         .eq('id', id).eq('tenant_id', profile.tenant_id).single()
       const full = await q(`${base}, ${contractCols}`)
@@ -313,9 +316,16 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
             kindLabel={isContract ? 'renta' : 'reserva'}
           />
         )}
+        {(profile.role === 'admin' || profile.role === 'superadmin') && <AuditHistoryLink recordId={reservation.id} />}
         <ContratoButton
           reservationId={reservation.id}
           defaultPrices={getReservationPrices(tenantRow?.settings)}
+          currency={getCurrencySettings(tenantRow?.settings)}
+          catalog={mergeCatalog(
+            // Conceptos tal como se eligieron en esta renta + los que el negocio tenga ahora
+            catalogFromBreakdown(resolveBreakdown(reservation).breakdown),
+            getPriceCatalog(tenantRow?.settings).all,
+          )}
           contract={(() => {
             const pr = resolveBreakdown(reservation)
             return {
@@ -334,6 +344,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
               driver_age:        reservation.driver_age,
               pets:              !!reservation.client_has_pets,
               deductible:        reservation.insurance_deductible != null ? Number(reservation.insurance_deductible) : null,
+              exchange_rate:     Number(reservation.exchange_rate) > 0 ? Number(reservation.exchange_rate) : null,
             }
           })()}
           client={client ? {
@@ -370,26 +381,46 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
             <p className="text-xs text-gray-500">{nights} día{nights !== 1 ? 's' : ''}</p>
             {reservation.total_amount != null && (
               <div className="text-right">
-                <p className="text-xs text-gray-400">Total</p>
-                <p className="text-base font-semibold text-gray-900">
-                  RD${Number(reservation.total_amount).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                </p>
-                {chargesTotal > 0 && (
-                  <p className="text-xs text-gray-600">
-                    + cargos RD${chargesTotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })} ={' '}
-                    <span className="font-semibold text-gray-900">
-                      RD${(Number(reservation.total_amount) + chargesTotal).toLocaleString('es-DO', { minimumFractionDigits: 2 })}
-                    </span>
-                  </p>
-                )}
-                {(reservation.cash_payment != null || reservation.card_payment != null) && (
-                  <p className="text-xs text-gray-500">
-                    Abonos:
-                    {reservation.cash_payment != null && <> efectivo RD${Number(reservation.cash_payment).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</>}
-                    {reservation.cash_payment != null && reservation.card_payment != null && ' ·'}
-                    {reservation.card_payment != null && <> tarjeta RD${Number(reservation.card_payment).toLocaleString('es-DO', { minimumFractionDigits: 2 })}</>}
-                  </p>
-                )}
+                {(() => {
+                  // Todo en US$; la moneda local solo al final (tasa congelada de esta renta)
+                  const cur      = getCurrencySettings(tenantRow?.settings)
+                  const rate     = rentalRate(reservation.exchange_rate, cur)
+                  const base     = Number(reservation.total_amount)
+                  const grand    = base + chargesTotal
+                  const cash     = Number(reservation.cash_payment) || 0
+                  const card     = Number(reservation.card_payment) || 0
+                  const paid     = paymentToUSD(cash, reservation.cash_payment_currency, rate) + paymentToUSD(card, reservation.card_payment_currency, rate)
+                  const local    = toLocal(grand, rate)
+                  return (
+                    <>
+                      <p className="text-xs text-gray-400">Total</p>
+                      <p className="text-base font-semibold text-gray-900">{fmtUSD(base)}</p>
+                      {chargesTotal > 0 && (
+                        <p className="text-xs text-gray-600">
+                          + cargos {fmtUSD(chargesTotal)} = <span className="font-semibold text-gray-900">{fmtUSD(grand)}</span>
+                        </p>
+                      )}
+                      <div className="mt-1.5 pt-1.5 border-t border-dashed border-gray-200 text-xs">
+                        <p className="text-gray-400">{fmtRate(rate, cur.localSymbol)}{!(Number(reservation.exchange_rate) > 0) && rate > 0 ? ' (de Configuración)' : ''}</p>
+                        <p className="font-semibold text-gray-800">{local != null ? fmtLocal(local, cur.localSymbol) : `Total en ${cur.localSymbol}: sin tasa`}</p>
+                      </div>
+                      {(cash > 0 || card > 0) && (
+                        <div className="mt-1 text-xs text-gray-500 space-y-0.5">
+                          <p>
+                            Abonos:
+                            {cash > 0 && <> efectivo {fmtPayment(cash, reservation.cash_payment_currency, cur)}</>}
+                            {cash > 0 && card > 0 && ' ·'}
+                            {card > 0 && <> tarjeta {fmtPayment(card, reservation.card_payment_currency, cur)}</>}
+                          </p>
+                          <p className="font-medium text-gray-700">
+                            Balance {fmtUSD(grand - paid)}
+                            {rate > 0 && <span className="text-gray-500 font-normal"> · {fmtLocal(toLocal(grand - paid, rate), cur.localSymbol)}</span>}
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
               </div>
             )}
           </div>
@@ -404,7 +435,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
                 const who = (Array.isArray(ch.creator) ? ch.creator[0] : ch.creator) as { full_name: string } | null
                 const det = (ch.details ?? {}) as { old_days?: number; new_days?: number; manually_adjusted?: boolean; kind?: string; swap_reason?: string; keep_price?: boolean; days_used?: number; days_remaining?: number }
                 const fmtD = (d: string | null) => d ? new Date(d).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }) : '—'
-                const fmtM = (n: number | string | null) => n == null ? '—' : `RD$${Number(n).toLocaleString('es-DO', { minimumFractionDigits: 2 })}`
+                const fmtM = (n: number | string | null) => fmtUSD(n)
                 if (ch.type === 'vehicle_change') {
                   return (
                     <li key={ch.id} className="text-sm border-l-2 border-indigo-200 pl-3">

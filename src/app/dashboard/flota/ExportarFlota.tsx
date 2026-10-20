@@ -51,7 +51,7 @@ export default function ExportarFlota() {
       // 3. Construir filas
       const headers = [
         'Marca', 'Modelo', 'Año', 'Color', 'Placas',
-        'Tarifa Diaria (RD$)', 'Estado', 'Activo',
+        'Tarifa Diaria (US$)', 'Estado', 'Activo',
         'VIN', 'Póliza de Seguro', 'Venc. Seguro (AAAA-MM-DD)',
         'Venc. Permiso (AAAA-MM-DD)', 'Notas',
       ]

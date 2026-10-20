@@ -8,9 +8,9 @@ import { createReservation, getAvailableVehicles, searchClients } from '../actio
 import BlacklistWarning from '@/components/dashboard/BlacklistWarning'
 import Link from 'next/link'
 import { calendarHref, type CalendarReturn } from '@/lib/calendarReturn'
+import { BASE_CURRENCY, fmtUSD, fmtLocal, fmtRate, toLocal, paymentToUSD, type CurrencySettings } from '@/lib/currency'
 import {
-  INSURANCE_ITEMS, EXTRA_ITEMS, TAX_ITEMS, ALL_PRICE_ITEMS,
-  type PriceItem, type ReservationPrices, computeBreakdown } from '@/lib/reservationPrices'
+  type PriceItem, type PriceCatalog, type ReservationPrices, computeBreakdown } from '@/lib/reservationPrices'
 
 interface Client {
   id: string; full_name: string; id_number: string
@@ -30,6 +30,8 @@ interface Props {
   initialVehicleId?: string
   /** Precios por defecto definidos por el admin en Configuración */
   defaultPrices: ReservationPrices
+  /** Seguros, extras e impuestos del negocio (base + creados en Configuración) */
+  catalog: PriceCatalog
   /**
    * 'reservation' (default): reserva normal, nace en "pendiente".
    * 'contract': contrato de mostrador (walk-in), nace como "contrato abierto" (confirmed).
@@ -38,12 +40,11 @@ interface Props {
   mode?: 'reservation' | 'contract'
   /** Si se abrió desde el calendario: a dónde regresar al cancelar o al guardar */
   calendarReturn?: CalendarReturn | null
+  /** Moneda local y tasa del tenant (los precios siempre van en US$) */
+  currency: CurrencySettings
 }
 
 // ── Seguros, extras e impuestos que van en el sidebar (catálogo en @/lib/reservationPrices) ──
-const INSURANCES   = INSURANCE_ITEMS
-const EXTRAS_FIXED = EXTRA_ITEMS
-const TAXES_FIXED  = TAX_ITEMS
 
 /** Input de precio editable que aparece al marcar un concepto */
 function PriceField({ item, value, onChange }: {
@@ -51,7 +52,7 @@ function PriceField({ item, value, onChange }: {
 }) {
   return (
     <div className="ml-5 mb-1 flex items-center gap-1">
-      {item.kind !== 'pct' && <span className="text-[10px] text-gray-400">RD$</span>}
+      {item.kind !== 'pct' && <span className="text-[10px] text-gray-400">US$</span>}
       <input
         type="text" inputMode="decimal" placeholder="0.00" value={value}
         onChange={e => {
@@ -101,7 +102,13 @@ export default function NuevaReservaForm({
   defaultPrices,
   mode = 'reservation',
   calendarReturn = null,
+  currency,
+  catalog,
 }: Props) {
+  // Catálogo del negocio (Configuración → Precios): lo visible aparece aquí
+  const INSURANCES   = catalog.insurance
+  const EXTRAS_FIXED = catalog.extra
+  const TAXES_FIXED  = catalog.tax
   const isContract = mode === 'contract'
   const sectionHref  = calendarReturn ? calendarHref(calendarReturn) : isContract ? '/dashboard/contratos' : '/dashboard/reservas'
   const sectionLabel = calendarReturn ? 'Calendario' : isContract ? 'Contratos' : 'Reservas'
@@ -254,7 +261,7 @@ export default function NuevaReservaForm({
   const [insChecked, setInsChecked] = useState<Record<string, boolean>>({})
   // Precios de seguros, extras e impuestos: precargados desde Configuración, editables por reserva
   const [prices, setPrices] = useState<Record<string, string>>(() =>
-    Object.fromEntries(ALL_PRICE_ITEMS.map(i => [i.key, defaultPrices[i.key] ? String(defaultPrices[i.key]) : '']))
+    Object.fromEntries(catalog.all.map(i => [i.key, defaultPrices[i.key] ? String(defaultPrices[i.key]) : '']))
   )
   const priceOf = (key: string) => parseFloat(prices[key] || '0') || 0
 
@@ -270,6 +277,11 @@ export default function NuevaReservaForm({
   const [abonoEfectivo, setAbonoEfectivo] = useState('')
   const [payTarjeta, setPayTarjeta]  = useState(false)
   const [abonoTarjeta, setAbonoTarjeta] = useState('')
+  // Moneda de cada abono: US$ o la moneda local (se convierte con la tasa de la renta)
+  const [cashCur, setCashCur] = useState<string>(BASE_CURRENCY.code)
+  const [cardCur, setCardCur] = useState<string>(BASE_CURRENCY.code)
+  // Tasa de cambio de esta renta: precargada desde Configuración y editable; queda guardada en la renta
+  const [exchangeRate, setExchangeRate] = useState(currency.rate ? String(currency.rate) : '')
 
   // Valores del enum payment_method en Postgres: cash | card | mixed
   const paymentMethod = payEfectivo && payTarjeta ? 'mixed'
@@ -285,13 +297,19 @@ export default function NuevaReservaForm({
     days: rentalDays,
     dailyRate: rate,
     checked: { ...insChecked, ...extrasChecked, ...taxesChecked },
-    prices: Object.fromEntries(ALL_PRICE_ITEMS.map(i => [i.key, priceOf(i.key)])),
+    prices: Object.fromEntries(catalog.all.map(i => [i.key, priceOf(i.key)])),
     otros: { label: otrosLabel, price: parseFloat(otrosPrice || '0') || 0, checked: otrosChecked },
-  })
+  }, catalog.all)
+  const lineAmount = (key: string) => breakdown.lines.find(l => l.key === key)?.amount ?? 0
   const rentalSubtotal = breakdown.rental_subtotal
   const otrosTotal = breakdown.lines.find(l => l.key === 'otros')?.amount ?? 0
   const taxAmount = (t: PriceItem) => breakdown.lines.find(l => l.key === t.key)?.amount ?? 0
   const grandTotal = breakdown.total
+  const rateNum    = parseFloat(exchangeRate) || 0
+  const localTotal = toLocal(grandTotal, rateNum)
+  const paidUSD =
+    (payEfectivo ? paymentToUSD(parseFloat(abonoEfectivo) || 0, cashCur, rateNum) : 0) +
+    (payTarjeta  ? paymentToUSD(parseFloat(abonoTarjeta)  || 0, cardCur, rateNum) : 0)
 
   // ¿El usuario modificó datos del cliente seleccionado? (se guardarán al crear la reserva)
   const clientDirty = useMemo(() => {
@@ -365,6 +383,9 @@ export default function NuevaReservaForm({
         {/* Abonos: solo se mandan si su método de pago está activado */}
         <input type="hidden" name="cash_payment" value={payEfectivo ? abonoEfectivo : ''} />
         <input type="hidden" name="card_payment" value={payTarjeta ? abonoTarjeta : ''} />
+        <input type="hidden" name="cash_payment_currency" value={cashCur} />
+        <input type="hidden" name="card_payment_currency" value={cardCur} />
+        <input type="hidden" name="exchange_rate" value={exchangeRate} />
         <input type="hidden" name="insurance_cdw_accepted" value={insField('cdw').accepted} />
         <input type="hidden" name="insurance_cdw_price"    value={insField('cdw').price} />
         <input type="hidden" name="insurance_lia_accepted" value={insField('lia').accepted} />
@@ -629,7 +650,7 @@ export default function NuevaReservaForm({
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Tarifa por Día</label>
                     <div className="flex items-center gap-1">
-                      <span className="text-xs text-gray-500">RD$</span>
+                      <span className="text-xs text-gray-500">US$</span>
                       <input type="number" min="0" step="0.01" inputMode="decimal" onKeyDown={blockNonNumericKeys} value={dailyRate}
                         onChange={e => setDailyRate(e.target.value)} disabled={pending}
                         placeholder="0.00" className={inputCls} />
@@ -646,12 +667,12 @@ export default function NuevaReservaForm({
                   <div className="grid grid-cols-2 gap-3 pt-1 border-t border-gray-100">
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Subtotal Renta</label>
-                      <div className={roInputCls}>RD${rentalSubtotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</div>
+                      <div className={roInputCls}>{fmtUSD(rentalSubtotal)}</div>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Total General</label>
                       <div className={`${roInputCls} font-bold text-blue-700`}>
-                        RD${grandTotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}
+                        {fmtUSD(grandTotal)}
                       </div>
                     </div>
                   </div>
@@ -680,15 +701,13 @@ export default function NuevaReservaForm({
                 <div className="space-y-3">
                   <Toggle label="Pagos en Efectivo"        checked={payEfectivo} onChange={setPayEfectivo} />
                   {payEfectivo && (
-                    <input type="number" min="0" step="0.01" inputMode="decimal" onKeyDown={blockNonNumericKeys} value={abonoEfectivo}
-                      onChange={e => setAbonoEfectivo(e.target.value)} placeholder="Abono en Efectivo"
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400" />
+                    <AbonoInput value={abonoEfectivo} onChange={setAbonoEfectivo} placeholder="Abono en Efectivo"
+                      cur={cashCur} onCur={setCashCur} currency={currency} rate={rateNum} />
                   )}
                   <Toggle label="Pagos en Tarjeta de Crédito" checked={payTarjeta} onChange={setPayTarjeta} />
                   {payTarjeta && (
-                    <input type="number" min="0" step="0.01" inputMode="decimal" onKeyDown={blockNonNumericKeys} value={abonoTarjeta}
-                      onChange={e => setAbonoTarjeta(e.target.value)} placeholder="Abono en Tarjeta"
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400" />
+                    <AbonoInput value={abonoTarjeta} onChange={setAbonoTarjeta} placeholder="Abono en Tarjeta"
+                      cur={cardCur} onCur={setCardCur} currency={currency} rate={rateNum} />
                   )}
                 </div>
               </div>
@@ -701,7 +720,10 @@ export default function NuevaReservaForm({
             {grandTotal > 0 && (
               <div className="xl:hidden flex items-center justify-between text-sm mb-2">
                 <span className="text-gray-600">Total</span>
-                <span className="font-bold text-blue-700">RD${grandTotal.toLocaleString('es-DO', { minimumFractionDigits: 2 })}</span>
+                <span className="text-right">
+                  <span className="font-bold text-blue-700">{fmtUSD(grandTotal)}</span>
+                  {localTotal != null && <span className="block text-xs text-gray-500">{fmtLocal(localTotal, currency.localSymbol)}</span>}
+                </span>
               </div>
             )}
             <div className="flex gap-3">
@@ -799,7 +821,7 @@ export default function NuevaReservaForm({
                 </div>
                 {otrosChecked && (
                   <div className="mt-1.5">
-                    <PriceField item={{ key: 'otros', label: 'Otros', kind: 'flat', fallback: 0 }}
+                    <PriceField item={{ key: 'otros', label: 'Otros', kind: 'flat', group: 'extra', fallback: 0 }}
                       value={otrosPrice} onChange={setOtrosPrice} />
                   </div>
                 )}
@@ -815,26 +837,26 @@ export default function NuevaReservaForm({
                 <div className="space-y-1.5 text-xs">
                   {rentalSubtotal > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-gray-600">Renta ({rentalDays}d × RD${rate})</span>
-                      <span className="font-medium">RD${rentalSubtotal.toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                      <span className="text-gray-600">Renta ({rentalDays}d × {fmtUSD(rate)})</span>
+                      <span className="font-medium text-gray-900">{fmtUSD(rentalSubtotal)}</span>
                     </div>
                   )}
                   {INSURANCES.filter(i => insChecked[i.key] && priceOf(i.key) > 0).map(ins => (
                     <div key={ins.key} className="flex justify-between">
                       <span className="text-gray-600 truncate mr-2">{ins.label.split('/')[0].trim()}</span>
-                      <span className="font-medium whitespace-nowrap">RD${(priceOf(ins.key) * rentalDays).toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                      <span className="font-medium text-gray-900 whitespace-nowrap">{fmtUSD(lineAmount(ins.key))}</span>
                     </div>
                   ))}
                   {EXTRAS_FIXED.filter(e => extrasChecked[e.key] && priceOf(e.key) > 0).map(e => (
                     <div key={e.key} className="flex justify-between">
                       <span className="text-gray-600 truncate mr-2">{e.label.split('/')[0].trim()}</span>
-                      <span className="font-medium whitespace-nowrap">RD${priceOf(e.key).toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                      <span className="font-medium text-gray-900 whitespace-nowrap">{fmtUSD(lineAmount(e.key))}</span>
                     </div>
                   ))}
                   {otrosTotal > 0 && (
                     <div className="flex justify-between">
                       <span className="text-gray-600 truncate mr-2">{otrosLabel.trim() || 'Otros'}</span>
-                      <span className="font-medium whitespace-nowrap">RD${otrosTotal.toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                      <span className="font-medium text-gray-900 whitespace-nowrap">{fmtUSD(otrosTotal)}</span>
                     </div>
                   )}
                   {TAXES_FIXED.filter(t => taxesChecked[t.key]).map(t => (
@@ -842,12 +864,41 @@ export default function NuevaReservaForm({
                       <span className="text-gray-600 truncate mr-2">
                         {t.label.split('/')[0].trim()}{t.kind === 'pct' ? ` (${priceOf(t.key)}%)` : ''}
                       </span>
-                      <span className="font-medium whitespace-nowrap">RD${taxAmount(t).toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                      <span className="font-medium text-gray-900 whitespace-nowrap">{fmtUSD(taxAmount(t))}</span>
                     </div>
                   ))}
                   <div className="border-t border-gray-200 pt-1.5 mt-1.5 flex justify-between">
-                    <span className="font-semibold text-gray-800">Total</span>
-                    <span className="font-bold text-blue-700 text-sm">RD${grandTotal.toLocaleString('es-DO', {minimumFractionDigits:2})}</span>
+                    <span className="font-semibold text-gray-800">Total (US$)</span>
+                    <span className="font-bold text-blue-700 text-sm">{fmtUSD(grandTotal)}</span>
+                  </div>
+                  {/* Moneda local: solo al final del cobro */}
+                  <div className="pt-1.5 mt-1.5 border-t border-dashed border-gray-200 space-y-1.5">
+                    <label className="flex gap-2 align-items-center justify-between">
+                      <span className="flex align-items-center text-gray-600">Tasa de cambio</span>
+                      <span className="flex items-center justify-end gap-1.5 text-gray-700 whitespace-nowrap">
+                        <span>1 US$ =</span>
+                        <input type="text" inputMode="decimal" value={exchangeRate}
+                          onChange={e => { const v = e.target.value; if (v === '' || /^\d{0,7}(\.\d{0,4})?$/.test(v)) setExchangeRate(v) }}
+                          placeholder="0.00" disabled={pending}
+                          className="w-15 px-2 py-1 text-xs text-right text-gray-900 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                        <span>{currency.localSymbol}</span>
+                      </span>
+                    </label>
+                    <div className="flex justify-between">
+                      <span className="font-semibold text-gray-800">Total ({currency.localSymbol})</span>
+                      <span className="font-bold text-gray-800">{localTotal != null ? fmtLocal(localTotal, currency.localSymbol) : 'Sin tasa'}</span>
+                    </div>
+                    {paidUSD > 0 && (
+                      <>
+                        <div className="flex justify-between text-gray-600"><span>Abonado</span><span className="text-gray-900">{fmtUSD(paidUSD)}</span></div>
+                        <div className="flex justify-between font-medium text-gray-900">
+                          <span>Balance</span>
+                          <span className="text-right">{fmtUSD(grandTotal - paidUSD)}
+                            {rateNum > 0 && <span className="block text-gray-500 font-normal">{fmtLocal(toLocal(grandTotal - paidUSD, rateNum), currency.localSymbol)}</span>}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               )}
@@ -869,6 +920,36 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
         className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-red-500' : 'bg-gray-200'}`}>
         <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transform transition ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
       </button>
+    </div>
+  )
+}
+
+// ── Abono con su moneda (US$ o moneda local) ─────────────────────────────────
+function AbonoInput({ value, onChange, placeholder, cur, onCur, currency, rate }: {
+  value: string; onChange: (v: string) => void; placeholder: string
+  cur: string; onCur: (v: string) => void; currency: CurrencySettings; rate: number
+}) {
+  const amount = parseFloat(value) || 0
+  const isLocal = cur !== BASE_CURRENCY.code
+  return (
+    <div>
+      <div className="flex gap-2">
+        <select value={cur} onChange={e => onCur(e.target.value)}
+          className="px-2 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          aria-label="Moneda del abono">
+          <option value={BASE_CURRENCY.code}>{BASE_CURRENCY.symbol}</option>
+          <option value={currency.localCode}>{currency.localSymbol}</option>
+        </select>
+        <input type="number" min="0" step="0.01" inputMode="decimal" value={value}
+          onKeyDown={e => { if (['e', 'E', '+', '-'].includes(e.key)) e.preventDefault() }}
+          onChange={e => onChange(e.target.value)} placeholder={placeholder}
+          className="flex-1 min-w-0 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400" />
+      </div>
+      {isLocal && amount > 0 && (
+        <p className={`mt-1 text-xs ${rate > 0 ? 'text-gray-500' : 'text-amber-600'}`}>
+          {rate > 0 ? `Equivale a ${fmtUSD(paymentToUSD(amount, cur, rate))} (${fmtRate(rate, currency.localSymbol)})` : 'Captura la tasa de cambio en el resumen para convertir este abono.'}
+        </p>
+      )}
     </div>
   )
 }

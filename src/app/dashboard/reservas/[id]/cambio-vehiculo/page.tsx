@@ -9,12 +9,13 @@ import { rentalFolio, rentalKind } from '@/lib/rentalLabels'
 import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
 import StartSwapForm from './StartSwapForm'
 import CancelSwapButton from './CancelSwapButton'
+import { fmtUSD } from '@/lib/currency'
 
 interface Props { params: Promise<{ id: string }> }
 
 type V = { brand: string; model: string; year: number; plates: string } | null
 const vLabel = (v: V) => v ? `${v.brand} ${v.model} ${v.year} · ${v.plates}` : '—'
-const money = (n: number | string | null) => n == null ? '—' : `RD$${Number(n).toLocaleString('es-DO', { minimumFractionDigits: 2 })}`
+const money = (n: number | string | null) => fmtUSD(n)
 
 export default async function CambioVehiculoPage({ params }: Props) {
   const { id } = await params

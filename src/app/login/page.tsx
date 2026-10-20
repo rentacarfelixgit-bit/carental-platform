@@ -15,7 +15,9 @@ function LoginForm() {
   const [error, setError] = useState<string | null>(
     searchParams.get('error') === 'auth_callback_error'
       ? 'El enlace expiró o no es válido. Intenta iniciar sesión de nuevo.'
-      : null
+      : searchParams.get('error') === 'inactivo'
+        ? 'Tu usuario está desactivado. Pide a un administrador que lo active.'
+        : null
   )
   const [loading, setLoading]       = useState(false)
   const [showPassword, setShowPassword] = useState(false)

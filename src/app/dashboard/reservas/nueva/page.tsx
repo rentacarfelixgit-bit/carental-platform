@@ -20,7 +20,7 @@ function toDatetime(val?: string, defaultTime = '08:00') {
 export default async function NuevaReservaPage({ searchParams }: Props) {
   const sp = await searchParams
   const { start, end, vehicle } = sp
-  const { clients, defaultPrices } = await loadRentalFormData()
+  const { clients, defaultPrices, currency, catalog } = await loadRentalFormData()
 
   return (
     <NuevaReservaForm
@@ -29,6 +29,8 @@ export default async function NuevaReservaPage({ searchParams }: Props) {
       initialEndDate={toDatetime(end, '08:00')}
       initialVehicleId={vehicle ?? ''}
       defaultPrices={defaultPrices}
+      currency={currency}
+      catalog={catalog}
       calendarReturn={parseCalendarReturn(sp)}
     />
   )

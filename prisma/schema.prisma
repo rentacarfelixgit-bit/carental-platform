@@ -269,6 +269,7 @@ model User {
   role      UserRole @default(operator)
   active    Boolean  @default(true)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6) // Eliminado conservando historial
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -433,7 +434,7 @@ model Reservation {
   // ── Contrato / pricing ──────────────────────────────────────────────────
   dailyRate       Decimal?       @map("daily_rate")       @db.Decimal(10, 2) // USD por día
   deposit         Decimal?       @db.Decimal(10, 2)
-  exchangeRate    Decimal?       @map("exchange_rate")    @db.Decimal(10, 4) // USD → RD
+  exchangeRate    Decimal?       @map("exchange_rate")    @db.Decimal(10, 4) // Tasa congelada de la renta: 1 US$ = X moneda local
   paymentMethod   PaymentMethod? @map("payment_method")
   itbis           Decimal?       @db.Decimal(5, 2)        // % ITBIS (ej: 18.00)
   airportFee      Decimal?       @map("airport_fee")      @db.Decimal(10, 2)
@@ -443,6 +444,8 @@ model Reservation {
   approvalNumber  String?        @map("approval_number")  // Número de aprobación
   cashPayment     Decimal?       @map("cash_payment")     @db.Decimal(10, 2) // Abono en efectivo
   cardPayment     Decimal?       @map("card_payment")     @db.Decimal(10, 2) // Abono en tarjeta
+  cashPaymentCurrency String    @default("USD") @map("cash_payment_currency") // USD o moneda local (p. ej. DOP)
+  cardPaymentCurrency String    @default("USD") @map("card_payment_currency")
   preparedBy      String?        @map("prepared_by")                         // Agente que preparó el contrato
   /// Desglose exacto de la reserva: seguros, extras, impuestos y "Otros" (ver src/lib/reservationPrices.ts)
   priceBreakdown  Json?          @map("price_breakdown")

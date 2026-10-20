@@ -4,12 +4,14 @@ import BusinessForm from './BusinessForm'
 import VehicleRatesForm from './VehicleRatesForm'
 import TaxForm from './TaxForm'
 import ReservationPricesForm from './ReservationPricesForm'
-import { getReservationPrices } from '@/lib/reservationPrices'
+import { getReservationPrices, getPriceCatalog, getHiddenKeys, getDeletedKeys } from '@/lib/reservationPrices'
 import ConfigTabs, { type ConfigTabId } from './ConfigTabs'
+import CurrencyForm from './CurrencyForm'
+import { getCurrencySettings } from '@/lib/currency'
 
 // Definido aquí (no en ConfigTabs) porque los valores exportados de un módulo 'use client'
 // no se pueden usar directamente en un Server Component.
-const CONFIG_TAB_IDS: ConfigTabId[] = ['negocio', 'impuestos', 'precios', 'tarifas']
+const CONFIG_TAB_IDS: ConfigTabId[] = ['negocio', 'moneda', 'impuestos', 'precios', 'tarifas']
 
 interface Props {
   searchParams: Promise<{ tab?: string }>
@@ -49,7 +51,7 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
     <div className="p-4 md:p-6 max-w-4xl mx-auto">
       <div className="mb-5">
         <h1 className="text-xl font-semibold text-gray-900">Configuración</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Datos del negocio, impuestos, precios y tarifas de la flota</p>
+        <p className="text-sm text-gray-500 mt-0.5">Datos del negocio, moneda, impuestos, precios y tarifas de la flota</p>
       </div>
 
       <ConfigTabs
@@ -63,6 +65,13 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
             content: <BusinessForm settings={settings} tenantName={tenant?.name ?? ''} timezone={tenant?.timezone ?? 'UTC'} />,
           },
           {
+            id: 'moneda',
+            label: 'Moneda y tasa de cambio',
+            description: 'Los precios van siempre en US$. Aquí defines la moneda local y la tasa para mostrar el total equivalente.',
+            icon: 'M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+            content: <CurrencyForm currency={getCurrencySettings(tenant?.settings)} canEdit={isAdmin} />,
+          },
+          {
             id: 'impuestos',
             label: 'Impuestos y cargos',
             description: 'Activa los impuestos que aplican. Se calculan sobre el subtotal y se muestran en el contrato.',
@@ -72,9 +81,9 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
           {
             id: 'precios',
             label: 'Precios de seguros, extras e impuestos',
-            description: 'Precios por defecto que se precargan al crear una reserva. Ahí se pueden ajustar para cada reserva.',
+            description: 'Precios por defecto (US$) que se precargan en cada renta. Agrega tus propios seguros, extras o impuestos, u oculta los que no uses.',
             icon: 'M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z',
-            content: <ReservationPricesForm prices={reservationPrices} canEdit={isAdmin} />,
+            content: <ReservationPricesForm items={getPriceCatalog(tenant?.settings, { includeHidden: true }).all} hidden={getHiddenKeys(tenant?.settings)} deleted={getDeletedKeys(tenant?.settings)} prices={reservationPrices} canEdit={isAdmin} />,
           },
           {
             id: 'tarifas',

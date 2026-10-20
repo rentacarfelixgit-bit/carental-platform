@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { updateVehicle } from '../../actions'
 import VehicleForm from '../../VehicleForm'
 import ToggleVehicleButton from './ToggleVehicleButton'
+import AuditHistoryLink from '@/components/dashboard/AuditHistoryLink'
 import VehiclePhotos from './VehiclePhotos'
 
 export default function EditarVehiculoPage({ params }: { params: Promise<{ id: string }> }) {
@@ -52,6 +53,9 @@ export default function EditarVehiculoPage({ params }: { params: Promise<{ id: s
 
   return (
     <>
+      {(userRole === 'admin' || userRole === 'superadmin') && (
+        <div className="px-6 pt-4 flex justify-end"><AuditHistoryLink recordId={id} /></div>
+      )}
       <VehicleForm
         action={action}
         state={state}

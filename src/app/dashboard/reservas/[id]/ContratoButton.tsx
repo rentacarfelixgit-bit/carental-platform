@@ -9,10 +9,10 @@
 import { useActionState, useRef, useState } from 'react'
 import { saveContractDetails, type ContractDetailsState } from './contractActions'
 import {
-  INSURANCE_ITEMS, EXTRA_ITEMS, TAX_ITEMS, ALL_PRICE_ITEMS,
   computeBreakdown, selectionFromBreakdown,
-  type PriceBreakdown, type PriceItem, type ReservationPrices,
+  type PriceBreakdown, type PriceItem, type PriceCatalog, type ReservationPrices,
 } from '@/lib/reservationPrices'
+import { fmtUSD, fmtLocal, toLocal, type CurrencySettings } from '@/lib/currency'
 
 export interface ClientForContrato {
   id: string
@@ -47,6 +47,8 @@ export interface ContractPrefill {
   driver_age: number | null
   pets: boolean
   deductible: number | null
+  /** Tasa guardada en la renta (null = usar la de Configuración) */
+  exchange_rate: number | null
 }
 
 interface Props {
@@ -55,9 +57,13 @@ interface Props {
   contract: ContractPrefill
   /** Precios por defecto de Configuración (para conceptos que se marquen aquí por primera vez) */
   defaultPrices: ReservationPrices
+  /** Moneda local y tasa del tenant */
+  currency: CurrencySettings
+  /** Conceptos de esta renta + los del catálogo actual del negocio (para poder agregarlos) */
+  catalog: PriceCatalog
 }
 
-const money = (n: number) => `RD$${n.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const money = (n: number) => fmtUSD(n)
 const unit = (it: PriceItem) => it.kind === 'per_day' ? '/día' : it.kind === 'pct' ? '%' : ''
 
 function FieldRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -95,7 +101,7 @@ function PriceInput({ value, onChange, disabled }: { value: string; onChange: (v
   )
 }
 
-export default function ContratoButton({ reservationId, client, contract, defaultPrices }: Props) {
+export default function ContratoButton({ reservationId, client, contract, defaultPrices, currency, catalog }: Props) {
   const [open, setOpen] = useState(false)
   const printWin = useRef<Window | null>(null)
 
@@ -127,7 +133,7 @@ export default function ContratoButton({ reservationId, client, contract, defaul
   const initial = selectionFromBreakdown(contract.breakdown, contract.days)
   const [checked, setChecked] = useState<Record<string, boolean>>(initial.checked)
   const [prices, setPrices] = useState<Record<string, string>>(() => Object.fromEntries(
-    ALL_PRICE_ITEMS.map(i => {
+    catalog.all.map(i => {
       const saved = initial.prices[i.key] || 0
       const v = saved > 0 ? saved : defaultPrices[i.key] ?? 0
       return [i.key, v ? String(v) : '']
@@ -138,6 +144,12 @@ export default function ContratoButton({ reservationId, client, contract, defaul
   const [otrosChecked, setOtrosChecked] = useState(initial.otros?.checked ?? false)
   const [deductible,   setDeductible]   = useState(contract.deductible != null ? String(contract.deductible) : '')
   const [pricingChanged, setPricingChanged] = useState(false)
+  // Tasa de esta renta (editable); si la renta no tenía, se precarga la de Configuración
+  const [exchangeRate, setExchangeRate] = useState(() => {
+    const r = contract.exchange_rate && contract.exchange_rate > 0 ? contract.exchange_rate : currency.rate
+    return r ? String(r) : ''
+  })
+  const rateNum = parseFloat(exchangeRate) || 0
 
   const touch = () => setPricingChanged(true)
   const toggle = (key: string, v: boolean) => { setChecked(p => ({ ...p, [key]: v })); touch() }
@@ -147,9 +159,9 @@ export default function ContratoButton({ reservationId, client, contract, defaul
     days: contract.days,
     dailyRate: parseFloat(dailyRate) || 0,
     checked,
-    prices: Object.fromEntries(ALL_PRICE_ITEMS.map(i => [i.key, parseFloat(prices[i.key] || '0') || 0])),
+    prices: Object.fromEntries(catalog.all.map(i => [i.key, parseFloat(prices[i.key] || '0') || 0])),
     otros: { label: otrosLabel, price: parseFloat(otrosPrice || '0') || 0, checked: otrosChecked },
-  })
+  }, catalog.all)
   const line = (key: string) => breakdown.lines.find(l => l.key === key)
 
   // Total que quedará en el contrato
@@ -251,6 +263,7 @@ export default function ContratoButton({ reservationId, client, contract, defaul
               <input type="hidden" name="driver_age"      value={edad} />
               <input type="hidden" name="pets"            value={mascotas ? '1' : '0'} />
               <input type="hidden" name="deductible"      value={deductible} />
+              <input type="hidden" name="exchange_rate"   value={exchangeRate} />
               <input type="hidden" name="pricing_changed" value={pricingChanged ? '1' : '0'} />
               <input type="hidden" name="price_breakdown" value={JSON.stringify(breakdown)} />
 
@@ -386,7 +399,7 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                 {/* Tarifa */}
                 <div className="flex items-center gap-2 text-xs">
                   <span className="text-gray-600 font-medium">Tarifa por día</span>
-                  <span className="text-gray-400">RD$</span>
+                  <span className="text-gray-400">US$</span>
                   <div className="w-28">
                     <PriceInput value={dailyRate} onChange={v => { setDailyRate(v); touch() }} disabled={pending} />
                   </div>
@@ -399,18 +412,21 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                     <thead>
                       <tr className="bg-gray-50">
                         <th className="text-left px-3 py-2 font-medium text-gray-600">Seguro</th>
-                        <th className="text-left px-3 py-2 font-medium text-gray-600 w-28 border-l border-gray-200">Precio (RD$/día)</th>
+                        <th className="text-left px-3 py-2 font-medium text-gray-600 w-28 border-l border-gray-200">Precio (US$)</th>
                         <th className="text-center px-3 py-2 font-medium text-gray-600 w-20 border-l border-gray-200">Aceptar</th>
                         <th className="text-center px-3 py-2 font-medium text-gray-600 w-20 border-l border-gray-200">Declinar</th>
                         <th className="text-right px-3 py-2 font-medium text-gray-600 w-28 border-l border-gray-200">Importe</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {INSURANCE_ITEMS.map(it => (
+                      {catalog.insurance.map(it => (
                         <tr key={it.key} className="hover:bg-gray-50">
                           <td className="px-3 py-2 text-gray-700">{it.label}</td>
                           <td className="px-3 py-2 border-l border-gray-200">
-                            <PriceInput value={prices[it.key] ?? ''} onChange={v => setPrice(it.key, v)} disabled={pending} />
+                            <div className="flex items-center gap-1">
+                              <PriceInput value={prices[it.key] ?? ''} onChange={v => setPrice(it.key, v)} disabled={pending} />
+                              <span className="text-gray-400 whitespace-nowrap">{unit(it)}</span>
+                            </div>
                           </td>
                           <td className="px-3 py-2 border-l border-gray-200 text-center">
                             <input type="radio" name={`ins_${it.key}`} checked={!!checked[it.key]}
@@ -430,13 +446,13 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                 </div>
                 <div className="flex items-center gap-2 text-xs">
                   <span className="text-gray-600">Deducible del seguro</span>
-                  <span className="text-gray-400">RD$</span>
+                  <span className="text-gray-400">US$</span>
                   <div className="w-28"><PriceInput value={deductible} onChange={setDeductible} disabled={pending} /></div>
                 </div>
 
                 {/* Extras e impuestos */}
                 <div className="rounded-xl border border-gray-200 divide-y divide-gray-100">
-                  {([['Extras', EXTRA_ITEMS], ['Impuestos', TAX_ITEMS]] as const).map(([title, items]) => (
+                  {([['Extras', catalog.extra], ['Impuestos', catalog.tax]] as const).map(([title, items]) => (
                     <div key={title} className="p-3 space-y-2">
                       <p className="text-[11px] font-semibold text-gray-500 uppercase">{title}</p>
                       {items.map(it => (
@@ -468,7 +484,7 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                 </div>
 
                 {/* Resumen: igual que el que sale en el contrato */}
-                <div className="bg-gray-50 rounded-xl p-4 text-xs space-y-1.5">
+                <div className="bg-gray-50 rounded-xl p-4 text-xs text-gray-900 space-y-1.5">
                   <div className="flex justify-between"><span className="text-gray-600">Renta ({breakdown.days}d × {money(breakdown.daily_rate)})</span><span>{money(breakdown.rental_subtotal)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-600">Seguros</span><span>{money(breakdown.insurance_total)}</span></div>
                   <div className="flex justify-between"><span className="text-gray-600">Extras</span><span>{money(breakdown.extras_total)}</span></div>
@@ -480,8 +496,23 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                     </div>
                   )}
                   <div className="flex justify-between border-t border-gray-200 pt-1.5 text-sm">
-                    <span className="font-semibold text-gray-800">Total del contrato</span>
+                    <span className="font-semibold text-gray-800">Total del contrato (US$)</span>
                     <span className="font-bold text-blue-700">{money(finalTotal)}</span>
+                  </div>
+                  {/* Moneda local: solo al final del cobro */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-dashed border-gray-200">
+                    <span className="text-gray-600">Tasa de cambio</span>
+                    <span className="flex items-center gap-1.5 text-gray-700 whitespace-nowrap">
+                      <span>1 US$ =</span>
+                      <input type="text" inputMode="decimal" value={exchangeRate} disabled={pending} placeholder="0.00"
+                        onChange={e => { const v = e.target.value; if (v === '' || /^\d{0,7}(\.\d{0,4})?$/.test(v)) setExchangeRate(v) }}
+                        className="w-24 px-2 py-1 text-xs text-right text-gray-900 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500" />
+                      <span>{currency.localSymbol}</span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="font-semibold text-gray-800">Total ({currency.localSymbol})</span>
+                    <span className="font-bold text-gray-800">{rateNum > 0 ? fmtLocal(toLocal(finalTotal, rateNum), currency.localSymbol) : 'Sin tasa'}</span>
                   </div>
                   {pricingChanged && savedTotal != null && Math.abs(savedTotal - breakdown.total) >= 0.01 && (
                     <p className="text-amber-700 pt-1">

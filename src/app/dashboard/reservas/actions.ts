@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { rentalFolio } from '@/lib/rentalLabels'
 import { parseCalendarReturn, calendarHref } from '@/lib/calendarReturn'
 import { randomUUID } from 'crypto'
-import { parseBreakdown, computeBreakdown, selectionFromBreakdown, rentalDaysBetween, insuranceColumns } from '@/lib/reservationPrices'
+import { parseBreakdown, computeBreakdown, selectionFromBreakdown, catalogFromBreakdown, rentalDaysBetween, insuranceColumns } from '@/lib/reservationPrices'
 
 export type ReservationFormState = {
   error?: string
@@ -333,6 +333,18 @@ export async function createReservation(
 
   const toPrice = (v?: string) => v ? parseFloat(v) || null : null
   const toBool  = (v?: string) => v === 'true' ? true : v === 'false' ? false : null
+  // Moneda: los montos van en US$. Tasa de la renta (1 US$ = X moneda local) y moneda de cada abono.
+  const rateRaw = Number(formData.get('exchange_rate')?.toString() ?? '')
+  const exchangeRate = Number.isFinite(rateRaw) && rateRaw > 0 && rateRaw < 1_000_000 ? Math.round(rateRaw * 10000) / 10000 : null
+  const payCurrency = (key: string) => {
+    const v = formData.get(key)?.toString().trim().toUpperCase() ?? ''
+    return /^[A-Z]{3}$/.test(v) ? v : 'USD'
+  }
+  if (!exchangeRate && (
+    (toPrice(cash_payment) && payCurrency('cash_payment_currency') !== 'USD') ||
+    (toPrice(card_payment) && payCurrency('card_payment_currency') !== 'USD'))) {
+    return { error: 'Para registrar un abono en moneda local captura la tasa de cambio en el resumen.' }
+  }
 
   // Desglose de precios (seguros, extras, impuestos, otros). Se recalcula aquí con los días
   // reales y la tarifa enviada: el total guardado siempre coincide con el desglose.
@@ -342,7 +354,7 @@ export async function createReservation(
         ...selectionFromBreakdown(sentBreakdown),
         days: rentalDaysBetween(start_date, end_date),
         dailyRate: toPrice(daily_rate) ?? sentBreakdown.daily_rate,
-      })
+      }, catalogFromBreakdown(sentBreakdown))
     : null
 
   // Validar que end_date > start_date
@@ -441,6 +453,10 @@ export async function createReservation(
       internal_notes: internal_notes?.trim() || null,
       cash_payment: toPrice(cash_payment),
       card_payment: toPrice(card_payment),
+      // Moneda de cada abono (US$ o la local) y tasa congelada de esta renta
+      cash_payment_currency: payCurrency('cash_payment_currency'),
+      card_payment_currency: payCurrency('card_payment_currency'),
+      exchange_rate: exchangeRate,
       daily_rate:   toPrice(daily_rate),
       total_amount: breakdown ? breakdown.total : total_amount ? parseFloat(total_amount) : null,
       price_breakdown: breakdown,
@@ -471,7 +487,7 @@ export async function createReservation(
     // (RLS no permite DELETE en clients, por eso se usa el cliente admin, limitado a este id y tenant.)
     if (newClientRow) {
       try {
-        await createAdminClient().from('clients').delete().eq('id', client_id).eq('tenant_id', ctx.tenantId)
+        await createAdminClient(ctx.user.id).from('clients').delete().eq('id', client_id).eq('tenant_id', ctx.tenantId)
       } catch { /* si falla la limpieza, el cliente queda creado y se puede reutilizar */ }
     }
     return { error: error?.message ?? 'Error al crear la reserva' }

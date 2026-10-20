@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { updateClient } from '../../actions'
 import ClientForm from '../../ClientForm'
 import BlacklistSection from './BlacklistSection'
+import AuditHistoryLink from '@/components/dashboard/AuditHistoryLink'
 import RentalHistory from './RentalHistory'
 
 interface BlacklistEntry {
@@ -113,6 +114,9 @@ export default function EditarClientePage({ params }: { params: Promise<{ id: st
         </div>
       )}
 
+      {isAdmin && (
+        <div className="px-6 pt-4 flex justify-end"><AuditHistoryLink recordId={id} /></div>
+      )}
       <ClientForm
         action={action}
         state={state}

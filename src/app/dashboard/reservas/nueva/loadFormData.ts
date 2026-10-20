@@ -4,7 +4,8 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import { getReservationPrices } from '@/lib/reservationPrices'
+import { getReservationPrices, getPriceCatalog } from '@/lib/reservationPrices'
+import { getCurrencySettings } from '@/lib/currency'
 
 export async function loadRentalFormData() {
   const supabase = await createClient()
@@ -34,6 +35,8 @@ export async function loadRentalFormData() {
   return {
     clients:       clients ?? [],
     defaultPrices: getReservationPrices(tenant?.settings),
+    currency:      getCurrencySettings(tenant?.settings),
+    catalog:       getPriceCatalog(tenant?.settings),
     timezone:      (tenant?.timezone as string | undefined) ?? 'UTC',
   }
 }

@@ -7,7 +7,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import {
-  parseBreakdown, computeBreakdown, selectionFromBreakdown, rentalDaysBetween, insuranceColumns,
+  parseBreakdown, computeBreakdown, selectionFromBreakdown, catalogFromBreakdown, rentalDaysBetween, insuranceColumns,
 } from '@/lib/reservationPrices'
 
 export type ContractDetailsState = { success?: boolean; error?: string; savedAt?: number }
@@ -75,6 +75,7 @@ export async function saveContractDetails(
     driver_age:                 age,
     client_has_pets:            formData.get('pets') === '1',
     insurance_deductible:       num('deductible'),
+    exchange_rate:              (() => { const r = num('exchange_rate'); return r && r > 0 && r < 1_000_000 ? Math.round(r * 10000) / 10000 : null })(),
     updated_at:                 new Date().toISOString(),
   }
   if ((PAYMENT_VALUES as readonly string[]).includes(payment)) update.payment_method = payment
@@ -84,7 +85,7 @@ export async function saveContractDetails(
   if (formData.get('pricing_changed') === '1') {
     const sent = parseBreakdown(formData.get('price_breakdown')?.toString() ?? '')
     if (!sent) return { error: 'No se pudo leer el desglose de precios.' }
-    const b = computeBreakdown({ ...selectionFromBreakdown(sent), days: rentalDaysBetween(r.start_date, r.end_date) })
+    const b = computeBreakdown({ ...selectionFromBreakdown(sent), days: rentalDaysBetween(r.start_date, r.end_date) }, catalogFromBreakdown(sent))
     update.price_breakdown = b
     update.total_amount = b.total
     update.daily_rate = b.daily_rate

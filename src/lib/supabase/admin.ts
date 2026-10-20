@@ -1,6 +1,11 @@
 import { createClient } from '@supabase/supabase-js'
 
-export function createAdminClient() {
+/**
+ * Cliente con la llave de servicio (salta RLS). Solo en el servidor.
+ * `actorId`: usuario que realmente hace la acción, para que la Auditoría lo registre
+ * (con la llave de servicio no hay sesión de la que tomarlo).
+ */
+export function createAdminClient(actorId?: string) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
 
@@ -15,5 +20,6 @@ export function createAdminClient() {
       autoRefreshToken: false,
       persistSession: false,
     },
+    global: { headers: actorId ? { 'x-actor-id': actorId } : {} },
   })
 }

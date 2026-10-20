@@ -7,6 +7,7 @@
 import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { previewReturnDateChange, changeReturnDate, type ReturnDatePreview } from '../actions'
+import { fmtUSD } from '@/lib/currency'
 
 interface Props {
   reservationId: string
@@ -16,7 +17,7 @@ interface Props {
 }
 
 const money = (n: number | null | undefined) =>
-  n == null ? '—' : `RD$${n.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  fmtUSD(n)
 
 export default function ChangeReturnDateButton({ reservationId, endDate, kindLabel }: Props) {
   const router = useRouter()
@@ -147,7 +148,7 @@ export default function ChangeReturnDateButton({ reservationId, endDate, kindLab
                   <div>
                     <label htmlFor="crd-total" className="block text-xs font-medium text-gray-600 mb-1">Total a cobrar</label>
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-gray-500">RD$</span>
+                      <span className="text-xs text-gray-500">US$</span>
                       <input
                         id="crd-total" type="text" inputMode="decimal" value={total} disabled={saving}
                         onChange={e => {

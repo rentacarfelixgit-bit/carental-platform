@@ -162,7 +162,7 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {canEditRate ? (
               <Field
-                label="Tarifa diaria (RD$) *"
+                label="Tarifa diaria (US$) *"
                 name="daily_rate"
                 type="number"
                 defaultValue={state.values?.daily_rate ?? vehicle?.daily_rate?.toString() ?? ''}
@@ -179,7 +179,7 @@ export default function VehicleForm({ action, state, pending, vehicle, title, su
                   Tarifa diaria
                 </label>
                 <div className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-600 flex items-center gap-1">
-                  <span className="text-gray-400 text-xs">RD$</span>
+                  <span className="text-gray-400 text-xs">US$</span>
                   {vehicle?.daily_rate != null
                     ? Number(vehicle.daily_rate).toLocaleString('es-DO', { minimumFractionDigits: 2 })
                     : '—'}

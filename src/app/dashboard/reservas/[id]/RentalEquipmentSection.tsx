@@ -14,6 +14,7 @@ import {
   EQUIPMENT_TYPES, EQUIPMENT_CONDITION, equipmentLabel,
   type EquipmentCondition, type EquipmentType,
 } from '@/lib/equipment'
+import { fmtUSD } from '@/lib/currency'
 
 export interface RentalEquipmentRow {
   id: string
@@ -46,7 +47,7 @@ interface Props {
   charges: RentalChargeRow[]
 }
 
-const money = (n: number) => `RD$${n.toLocaleString('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+const money = (n: number) => fmtUSD(n)
 const fmt = (d: string) => new Date(d).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })
 const inputCls = 'w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50'
 
@@ -356,7 +357,7 @@ function ReturnModal({ row, tenantId, onClose }: { row: RentalEquipmentRow; tena
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Monto *</label>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs text-gray-500">RD$</span>
+                  <span className="text-xs text-gray-500">US$</span>
                   <input type="text" inputMode="decimal" value={amount} disabled={pending}
                     onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d{0,2}$/.test(v)) setAmount(v) }}
                     className={inputCls} placeholder="0.00" />
@@ -416,7 +417,7 @@ function ChargeModal({ reservationId, tenantId, onClose }: { reservationId: stri
       <div>
         <label className="block text-xs font-medium text-gray-600 mb-1">Monto *</label>
         <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500">RD$</span>
+          <span className="text-xs text-gray-500">US$</span>
           <input type="text" inputMode="decimal" value={amount} disabled={pending}
             onChange={e => { const v = e.target.value; if (v === '' || /^\d*\.?\d{0,2}$/.test(v)) setAmount(v) }}
             className={inputCls} placeholder="0.00" />
