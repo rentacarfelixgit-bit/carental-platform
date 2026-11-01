@@ -12,6 +12,7 @@ import {
 } from '@/lib/rentalLabels'
 import { parseSort, sortOrders, applySortParams, RENTAL_SORT_KEYS, RENTAL_SORT_COLUMNS, type SortState } from '@/lib/tableSort'
 import { SortLinkTh } from '@/components/dashboard/SortableTh'
+import { isOpenEnded, effectiveEnd } from '@/lib/openEnded'
 
 const PAGE_SIZE = 20
 
@@ -176,7 +177,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                 {contracts.map(c => {
                   const client  = c.clients  as unknown as { full_name: string; id_number: string } | null
                   const vehicle = c.vehicles as unknown as { plates: string; brand: string; model: string } | null
-                  const days = Math.ceil((new Date(c.end_date).getTime() - new Date(c.start_date).getTime()) / 86_400_000)
+                  const days = Math.ceil((new Date(effectiveEnd(c.start_date, c.end_date)).getTime() - new Date(c.start_date).getTime()) / 86_400_000)
                   return (
                     <tr key={c.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 font-mono text-xs text-gray-700 whitespace-nowrap">{rentalFolio(c.origin, c.number)}</td>
@@ -191,7 +192,7 @@ export default async function ContratosPage({ searchParams }: Props) {
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-xs text-gray-600">
                         <p>{new Date(c.start_date).toLocaleDateString('es-MX')} →</p>
-                        <p>{new Date(c.end_date).toLocaleDateString('es-MX')} <span className="text-gray-400">({days}d)</span></p>
+                        <p>{isOpenEnded(c.end_date) ? <span className="text-amber-700">Sin fecha de retorno</span> : new Date(c.end_date).toLocaleDateString('es-MX')} <span className="text-gray-400">({days}d{isOpenEnded(c.end_date) ? ' a hoy' : ''})</span></p>
                       </td>
                       <td className="px-4 py-3"><StatusBadge status={c.status} origin={c.origin} /></td>
                       <td className="px-4 py-3 text-right">

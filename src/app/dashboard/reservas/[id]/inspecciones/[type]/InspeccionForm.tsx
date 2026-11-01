@@ -10,6 +10,8 @@ import PhotoUploader, { type InspectionPhotoInput } from './PhotoUploader'
 import { REQUIRED_INSPECTION_ANGLES, angleLabel } from '@/lib/photoAngles'
 import Link from 'next/link'
 import type { BaselinePhoto } from './page'
+import CloseAdjustment from './CloseAdjustment'
+import type { ClosePreview } from '@/lib/rentalClose'
 
 const FUEL_LABELS: Record<string, string> = {
   full:            'Lleno (100%)',
@@ -28,9 +30,11 @@ interface Props {
   baselinePhotos: BaselinePhoto[]
   /** Si la inspección es parte de un cambio de vehículo */
   swapId?: string | null
+  /** Recepción final con regreso tardío o sin fecha de retorno: ajuste del total */
+  closePreview?: ClosePreview | null
 }
 
-export default function InspeccionForm({ reservationId, type, vehicleLabel, tenantId, inspectionId, baselinePhotos, swapId = null }: Props) {
+export default function InspeccionForm({ reservationId, type, vehicleLabel, tenantId, inspectionId, baselinePhotos, swapId = null, closePreview = null }: Props) {
   const searchParams = useSearchParams()
   const preOdometer  = searchParams.get('odometer') ?? ''
   const preFuel      = searchParams.get('fuel') ?? ''
@@ -243,6 +247,9 @@ export default function InspeccionForm({ reservationId, type, vehicleLabel, tena
             />
           </div>
         )}
+
+        {/* Regreso tardío / sin fecha de retorno: total a cobrar */}
+        {closePreview && <CloseAdjustment preview={closePreview} disabled={pending} />}
 
         {/* Notas */}
         <div className="bg-white border border-gray-200 rounded-xl p-5">

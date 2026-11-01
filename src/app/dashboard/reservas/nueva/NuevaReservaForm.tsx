@@ -8,9 +8,14 @@ import { createReservation, getAvailableVehicles, searchClients } from '../actio
 import BlacklistWarning from '@/components/dashboard/BlacklistWarning'
 import Link from 'next/link'
 import { calendarHref, type CalendarReturn } from '@/lib/calendarReturn'
+import VehiclePicker from './VehiclePicker'
+import { OPEN_END_LOCAL, isOpenEnded } from '@/lib/openEnded'
 import { BASE_CURRENCY, fmtUSD, fmtLocal, fmtRate, toLocal, paymentToUSD, type CurrencySettings } from '@/lib/currency'
 import {
-  type PriceItem, type PriceCatalog, type ReservationPrices, computeBreakdown } from '@/lib/reservationPrices'
+  type PriceItem, type PriceCatalog, type ReservationPrices, type DropoffLocation, type CardInsurance,
+  computeBreakdown, insuranceLocked } from '@/lib/reservationPrices'
+import { InsuranceWaiverControls, DeclinedInsurancesList, declinedInsurances } from '@/components/dashboard/rental/InsuranceWaiver'
+import DropoffEditor, { dropoffsForBreakdown, type DropoffDraft } from '@/components/dashboard/rental/DropoffEditor'
 
 interface Client {
   id: string; full_name: string; id_number: string
@@ -32,6 +37,8 @@ interface Props {
   defaultPrices: ReservationPrices
   /** Seguros, extras e impuestos del negocio (base + creados en Configuración) */
   catalog: PriceCatalog
+  /** Ubicaciones de Drop off (Configuración) */
+  dropoffLocations: DropoffLocation[]
   /**
    * 'reservation' (default): reserva normal, nace en "pendiente".
    * 'contract': contrato de mostrador (walk-in), nace como "contrato abierto" (confirmed).
@@ -104,6 +111,7 @@ export default function NuevaReservaForm({
   calendarReturn = null,
   currency,
   catalog,
+  dropoffLocations,
 }: Props) {
   // Catálogo del negocio (Configuración → Precios): lo visible aparece aquí
   const INSURANCES   = catalog.insurance
@@ -217,6 +225,16 @@ export default function NuevaReservaForm({
   // ── Vehículos y fechas ────────────────────────────────────────────────────
   const [startDate, setStartDate] = useState(initialStartDate)
   const [endDate,   setEndDate]   = useState(initialEndDate)
+  // Sin fecha de retorno: el regreso se define al cerrar la renta
+  const openEnded = isOpenEnded(endDate)
+  const [lastEndDate, setLastEndDate] = useState('')
+  function toggleOpenEnded(on: boolean) {
+    if (on) { setLastEndDate(isOpenEnded(endDate) ? '' : endDate); handleDateChange('', OPEN_END_LOCAL) }
+    else {
+      setEndDate(lastEndDate)
+      if (lastEndDate) handleDateChange('', lastEndDate); else setAvailableVehicles(null)
+    }
+  }
   const [availableVehicles, setAvailableVehicles] = useState<Vehicle[] | null>(null)
   const [loadingVehicles, setLoadingVehicles]     = useTransition()
   const [selectedVehicle, setSelectedVehicle]     = useState<Vehicle | null>(null)
@@ -253,6 +271,7 @@ export default function NuevaReservaForm({
   }
 
   const rentalDays = useMemo(() => {
+    if (startDate && isOpenEnded(endDate)) return 1   // estimado: se cobra por días reales al cerrar
     if (!startDate || !endDate || new Date(endDate) <= new Date(startDate)) return 0
     return Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24))
   }, [startDate, endDate])
@@ -271,6 +290,11 @@ export default function NuevaReservaForm({
   const [otrosLabel,    setOtrosLabel]    = useState('')
   const [otrosChecked,  setOtrosChecked]  = useState(false)
   const [otrosPrice,    setOtrosPrice]    = useState('')
+  // Declinar todos / seguro de tarjeta / drop off
+  const [waiveAll, setWaiveAll] = useState(false)
+  const [cardIns,  setCardIns]  = useState<CardInsurance | null>(null)
+  const [dropoffLines, setDropoffLines] = useState<DropoffDraft[]>([])
+  const locked = (key: string) => insuranceLocked(key, waiveAll, cardIns)
 
   // ── Pago ──────────────────────────────────────────────────────────────────
   const [payEfectivo, setPayEfectivo] = useState(false)
@@ -299,7 +323,11 @@ export default function NuevaReservaForm({
     checked: { ...insChecked, ...extrasChecked, ...taxesChecked },
     prices: Object.fromEntries(catalog.all.map(i => [i.key, priceOf(i.key)])),
     otros: { label: otrosLabel, price: parseFloat(otrosPrice || '0') || 0, checked: otrosChecked },
+    waiveAll,
+    cardInsurance: cardIns,
+    dropoffs: dropoffsForBreakdown(dropoffLines, dropoffLocations),
   }, catalog.all)
+  const declined = (waiveAll || cardIns) ? declinedInsurances(INSURANCES, insChecked, waiveAll, cardIns) : []
   const lineAmount = (key: string) => breakdown.lines.find(l => l.key === key)?.amount ?? 0
   const rentalSubtotal = breakdown.rental_subtotal
   const otrosTotal = breakdown.lines.find(l => l.key === 'otros')?.amount ?? 0
@@ -336,8 +364,8 @@ export default function NuevaReservaForm({
 
   function insField(key: string) {
     return {
-      accepted: insChecked[key] ? 'true' : 'false',
-      price:    insChecked[key] ? (prices[key] || '') : '',
+      accepted: insChecked[key] && !locked(key) ? 'true' : 'false',
+      price:    insChecked[key] && !locked(key) ? (prices[key] || '') : '',
     }
   }
 
@@ -600,24 +628,15 @@ export default function NuevaReservaForm({
                       {availableVehicles?.length === 0 ? (
                         <p className="text-sm text-orange-600 py-2">No hay vehículos disponibles para esas fechas.</p>
                       ) : (
-                        <select
-                          name="vehicle_id"
-                          value={selectedVehicle?.id ?? ''}
+                        <VehiclePicker
+                          vehicles={availableVehicles ?? []}
+                          value={selectedVehicle}
                           disabled={pending}
-                          onChange={e => {
-                            const v = availableVehicles?.find(v => v.id === e.target.value) ?? null
+                          onChange={v => {
                             setSelectedVehicle(v)
                             setDailyRate(v?.daily_rate ? String(v.daily_rate) : '')
                           }}
-                          className={inputCls}
-                        >
-                          <option value="">— Selecciona —</option>
-                          {(availableVehicles ?? []).map(v => (
-                            <option key={v.id} value={v.id}>
-                              {v.brand} {v.model} {v.year} · {v.color}
-                            </option>
-                          ))}
-                        </select>
+                        />
                       )}
                       {state.fieldErrors?.vehicle_id && (
                         <p className="mt-1 text-xs text-red-600">{state.fieldErrors.vehicle_id[0]}</p>
@@ -641,9 +660,27 @@ export default function NuevaReservaForm({
                   {state.fieldErrors?.start_date && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.start_date[0]}</p>}
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Fecha de Retorno <span className="text-red-500">*</span></label>
-                  <input type="datetime-local" name="end_date" value={endDate}
-                    onChange={e => handleDateChange('', e.target.value)} disabled={pending} className={inputCls} />
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <label className="block text-xs font-medium text-gray-600">Fecha de Retorno {!openEnded && <span className="text-red-500">*</span>}</label>
+                    <label className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" checked={openEnded} disabled={pending} onChange={e => toggleOpenEnded(e.target.checked)}
+                        className="rounded accent-blue-600" />
+                      Sin fecha de retorno
+                    </label>
+                  </div>
+                  {openEnded ? (
+                    <>
+                      <input type="hidden" name="end_date" value={OPEN_END_LOCAL} />
+                      <div className={`${roInputCls} text-gray-500`}>Indefinida — se define al cerrar la renta</div>
+                      <p className="mt-1 text-[11px] text-gray-500">
+                        El vehículo queda ocupado hasta que se reciba. El total se calcula por los días reales al cerrar
+                        (con 4 h de tolerancia); mientras tanto se muestra el estimado de 1 día.
+                      </p>
+                    </>
+                  ) : (
+                    <input type="datetime-local" name="end_date" value={endDate}
+                      onChange={e => handleDateChange('', e.target.value)} disabled={pending} className={inputCls} />
+                  )}
                   {state.fieldErrors?.end_date && <p className="mt-1 text-xs text-red-600">{state.fieldErrors.end_date[0]}</p>}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -659,7 +696,7 @@ export default function NuevaReservaForm({
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Cantidad de Días</label>
                     <div className={`${roInputCls} font-medium text-blue-700`}>
-                      {rentalDays > 0 ? rentalDays : '—'}
+                      {openEnded ? 'Abierto' : rentalDays > 0 ? rentalDays : '—'}
                     </div>
                   </div>
                 </div>
@@ -758,20 +795,24 @@ export default function NuevaReservaForm({
 
               {/* Seguros */}
               <div className="space-y-1.5 mb-3">
+                <InsuranceWaiverControls compact waiveAll={waiveAll} onWaiveAll={setWaiveAll}
+                  card={cardIns} onCard={setCardIns} disabled={pending} />
                 {INSURANCES.map(ins => (
                   <div key={ins.key}>
-                    <label className="flex items-center gap-2 cursor-pointer group py-1">
-                      <input type="checkbox" checked={!!insChecked[ins.key]}
+                    <label className={`flex items-center gap-2 group py-1 ${locked(ins.key) ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                      <input type="checkbox" checked={!!insChecked[ins.key] && !locked(ins.key)} disabled={locked(ins.key)}
                         onChange={() => setInsChecked(p => ({ ...p, [ins.key]: !p[ins.key] }))}
-                        className="rounded accent-blue-600 flex-shrink-0" />
-                      <span className="text-xs text-gray-700 group-hover:text-gray-900 flex-1">{ins.label}</span>
+                        className="rounded accent-blue-600 flex-shrink-0 disabled:opacity-40" />
+                      <span className={`text-xs flex-1 ${locked(ins.key) ? 'text-gray-400 line-through' : 'text-gray-700 group-hover:text-gray-900'}`}>{ins.label}</span>
+                      {locked(ins.key) && <span className="text-[10px] font-medium text-red-600">Declinado</span>}
                     </label>
-                    {insChecked[ins.key] && (
+                    {insChecked[ins.key] && !locked(ins.key) && (
                       <PriceField item={ins} value={prices[ins.key] ?? ''}
                         onChange={v => setPrices(p => ({ ...p, [ins.key]: v }))} />
                     )}
                   </div>
                 ))}
+                {declined.length > 0 && <DeclinedInsurancesList compact items={declined} />}
               </div>
 
               <div className="border-t border-gray-100 pt-2.5 space-y-1.5 mb-3">
@@ -826,6 +867,12 @@ export default function NuevaReservaForm({
                   </div>
                 )}
               </div>
+
+              {/* Drop off: entregar / recoger en otra ubicación (puede ser más de uno) */}
+              <div className="border-t border-gray-100 pt-2.5 mt-3">
+                <p className="text-xs font-medium text-gray-700 mb-1.5">Drop off</p>
+                <DropoffEditor compact lines={dropoffLines} onChange={setDropoffLines} locations={dropoffLocations} disabled={pending} />
+              </div>
             </div>
 
             {/* Resumen */}
@@ -837,11 +884,11 @@ export default function NuevaReservaForm({
                 <div className="space-y-1.5 text-xs">
                   {rentalSubtotal > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-gray-600">Renta ({rentalDays}d × {fmtUSD(rate)})</span>
+                      <span className="text-gray-600">Renta ({openEnded ? 'estimado 1d' : `${rentalDays}d`} × {fmtUSD(rate)})</span>
                       <span className="font-medium text-gray-900">{fmtUSD(rentalSubtotal)}</span>
                     </div>
                   )}
-                  {INSURANCES.filter(i => insChecked[i.key] && priceOf(i.key) > 0).map(ins => (
+                  {INSURANCES.filter(i => (breakdown.lines.find(l => l.key === i.key)?.amount ?? 0) > 0).map(ins => (
                     <div key={ins.key} className="flex justify-between">
                       <span className="text-gray-600 truncate mr-2">{ins.label.split('/')[0].trim()}</span>
                       <span className="font-medium text-gray-900 whitespace-nowrap">{fmtUSD(lineAmount(ins.key))}</span>
@@ -851,6 +898,12 @@ export default function NuevaReservaForm({
                     <div key={e.key} className="flex justify-between">
                       <span className="text-gray-600 truncate mr-2">{e.label.split('/')[0].trim()}</span>
                       <span className="font-medium text-gray-900 whitespace-nowrap">{fmtUSD(lineAmount(e.key))}</span>
+                    </div>
+                  ))}
+                  {breakdown.lines.filter(l => l.group === 'dropoff' && l.amount > 0).map(l => (
+                    <div key={l.key} className="flex justify-between">
+                      <span className="text-gray-600 truncate mr-2">Drop off · {l.label}</span>
+                      <span className="font-medium text-gray-900 whitespace-nowrap">{fmtUSD(l.amount)}</span>
                     </div>
                   ))}
                   {otrosTotal > 0 && (

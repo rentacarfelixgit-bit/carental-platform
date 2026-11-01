@@ -8,6 +8,7 @@ import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { previewReturnDateChange, changeReturnDate, type ReturnDatePreview } from '../actions'
 import { fmtUSD } from '@/lib/currency'
+import { isOpenEnded } from '@/lib/openEnded'
 
 interface Props {
   reservationId: string
@@ -22,7 +23,9 @@ const money = (n: number | null | undefined) =>
 export default function ChangeReturnDateButton({ reservationId, endDate, kindLabel }: Props) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
-  const current = endDate.slice(0, 16)          // formato datetime-local
+  // Renta sin fecha de retorno: no hay fecha actual que mostrar
+  const openEnded = isOpenEnded(endDate)
+  const current = openEnded ? '' : endDate.slice(0, 16)          // formato datetime-local
   const [newEnd, setNewEnd] = useState(current)
   const [preview, setPreview] = useState<ReturnDatePreview | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
@@ -104,7 +107,7 @@ export default function ChangeReturnDateButton({ reservationId, endDate, kindLab
                 <div>
                   <p className="block text-xs font-medium text-gray-600 mb-1">Regreso actual</p>
                   <p className="px-3 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg text-gray-700">
-                    {new Date(current).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}
+                    {openEnded ? 'Sin fecha de retorno' : new Date(current).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}
                   </p>
                 </div>
                 <div>

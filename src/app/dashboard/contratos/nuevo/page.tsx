@@ -12,7 +12,7 @@ interface Props {
 
 export default async function NuevoContratoPage({ searchParams }: Props) {
   const sp = await searchParams
-  const { clients, defaultPrices, timezone, currency, catalog } = await loadRentalFormData()
+  const { clients, defaultPrices, timezone, currency, catalog, dropoffLocations } = await loadRentalFormData()
 
   return (
     <NuevaReservaForm
@@ -22,6 +22,7 @@ export default async function NuevoContratoPage({ searchParams }: Props) {
       defaultPrices={defaultPrices}
       currency={currency}
       catalog={catalog}
+      dropoffLocations={dropoffLocations}
       calendarReturn={parseCalendarReturn(sp)}
     />
   )

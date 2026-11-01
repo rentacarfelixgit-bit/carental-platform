@@ -7,6 +7,7 @@ import { rentalFolio, statusStyle } from '@/lib/rentalLabels'
 import { sortRows, RENTAL_STATUS_RANK } from '@/lib/tableSort'
 import { useTableSort } from '@/lib/useTableSort'
 import { SortButtonTh } from '@/components/dashboard/SortableTh'
+import { isOpenEnded, effectiveEnd } from '@/lib/openEnded'
 
 interface Reservation {
   id: string
@@ -65,7 +66,7 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
   })
 
   const nights = (r: Reservation) => Math.max(1, Math.ceil(
-    (new Date(r.end_date).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
+    (new Date(effectiveEnd(r.start_date, r.end_date)).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
   ))
 
   return (
@@ -108,7 +109,7 @@ export default function RentalHistory({ clientId }: { clientId: string }) {
                     ) : <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-4 py-3 hidden sm:table-cell text-xs text-gray-500">
-                    <p>{new Date(r.start_date).toLocaleDateString('es-MX')} → {new Date(r.end_date).toLocaleDateString('es-MX')}</p>
+                    <p>{new Date(r.start_date).toLocaleDateString('es-MX')} → {isOpenEnded(r.end_date) ? 'Sin fecha de retorno' : new Date(r.end_date).toLocaleDateString('es-MX')}</p>
                     <p className="text-gray-400">{nights(r)} día{nights(r) !== 1 ? 's' : ''}</p>
                   </td>
                   <td className="px-4 py-3">

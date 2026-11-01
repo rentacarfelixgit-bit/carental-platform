@@ -12,6 +12,10 @@ import { rentalFolio } from '@/lib/rentalLabels'
 import { parseCalendarReturn, calendarHref } from '@/lib/calendarReturn'
 import { randomUUID } from 'crypto'
 import { parseBreakdown, computeBreakdown, selectionFromBreakdown, catalogFromBreakdown, rentalDaysBetween, insuranceColumns } from '@/lib/reservationPrices'
+import { applyCloseAdjustment, totalForDays, previewClose, type CloseRow } from '@/lib/rentalClose'
+
+const EARLY_CLOSE_ERROR = 'El vehículo regresó antes de lo pactado. Ciérrala con la inspección de entrada completa para elegir cómo cobrar (lo pactado, solo los días usados o con penalización).'
+import { isOpenEnded } from '@/lib/openEnded'
 
 export type ReservationFormState = {
   error?: string
@@ -352,7 +356,8 @@ export async function createReservation(
   const breakdown = sentBreakdown
     ? computeBreakdown({
         ...selectionFromBreakdown(sentBreakdown),
-        days: rentalDaysBetween(start_date, end_date),
+        // Sin fecha de retorno: se guarda el estimado de 1 día; el total real se calcula al cerrar
+        days: isOpenEnded(end_date) ? 1 : rentalDaysBetween(start_date, end_date),
         dailyRate: toPrice(daily_rate) ?? sentBreakdown.daily_rate,
       }, catalogFromBreakdown(sentBreakdown))
     : null
@@ -606,6 +611,12 @@ export async function changeReservationStatus(reservationId: string, newStatus: 
     updateData.confirmed_at = new Date().toISOString()
   }
 
+  // Al completar: si se regresó tarde (o no tenía fecha de retorno), ajustar fecha y total
+  if (newStatus === 'completed') {
+    const adj = await applyCloseAdjustment(ctx.supabase, ctx.tenantId, ctx.user.id, reservationId)
+    if (adj.error) return { error: /antes de lo pactado/.test(adj.error) ? EARLY_CLOSE_ERROR : adj.error }
+  }
+
   const { error } = await ctx.supabase
     .from('reservations')
     .update(updateData)
@@ -666,6 +677,13 @@ export async function createQuickInspection(
   if (!reservation) return { error: 'Reserva no encontrada' }
   if (reservation.status === 'cancelled') return { error: 'No se pueden agregar inspecciones a reservas canceladas' }
   if (type === 'checkin' && await hasOpenVehicleSwap(ctx, reservationId)) return { error: OPEN_SWAP_ERROR }
+  // Regreso anticipado: hay que elegir cómo cobrar → solo desde la inspección de entrada completa
+  if (type === 'checkin') {
+    const { data: rc } = await ctx.supabase.from('reservations')
+      .select('id, start_date, end_date, total_amount, daily_rate, price_breakdown')
+      .eq('id', reservationId).eq('tenant_id', ctx.tenantId).single()
+    if (rc && previewClose(rc as CloseRow).kind === 'early') return { error: EARLY_CLOSE_ERROR }
+  }
 
   // Insertar inspección sin fotos
   const { error: insErr } = await ctx.supabase.from('inspections').insert({
@@ -693,6 +711,12 @@ export async function createQuickInspection(
     } else {
       return { error: insErr.message }
     }
+  }
+
+  // Cierre: regreso tardío o renta sin fecha de retorno → ajustar fecha y total
+  if (type === 'checkin') {
+    const adj = await applyCloseAdjustment(ctx.supabase, ctx.tenantId, ctx.user.id, reservationId)
+    if (adj.error) return { error: /antes de lo pactado/.test(adj.error) ? EARLY_CLOSE_ERROR : adj.error }
   }
 
   // Sincronizar estados (misma lógica que changeReservationStatus)
@@ -746,7 +770,7 @@ export type ReturnDatePreview = {
 async function loadRentalForReturnChange(ctx: Ctx, reservationId: string) {
   const { data } = await ctx.supabase
     .from('reservations')
-    .select('id, status, origin, start_date, end_date, total_amount, daily_rate, vehicle_id')
+    .select('id, status, origin, start_date, end_date, total_amount, daily_rate, vehicle_id, price_breakdown')
     .eq('id', reservationId)
     .eq('tenant_id', ctx.tenantId)
     .single()
@@ -788,10 +812,17 @@ async function findReturnDateConflict(ctx: Ctx, r: { id: string; vehicle_id: str
   return null
 }
 
-function suggestTotal(r: { start_date: string; end_date: string; total_amount: number | null; daily_rate: number | null }, newEnd: string) {
-  const oldDays = rentalDays(r.start_date, r.end_date)
+function suggestTotal(r: { id?: string; start_date: string; end_date: string; total_amount: number | null; daily_rate: number | null; price_breakdown?: unknown }, newEnd: string) {
+  // Renta sin fecha de retorno: el total guardado es de 1 día (estimado)
+  const oldDays = isOpenEnded(r.end_date) ? 1 : rentalDays(r.start_date, r.end_date)
   const newDays = rentalDays(r.start_date, newEnd)
   const oldTotal = r.total_amount != null ? Number(r.total_amount) : null
+  // Con desglose: los conceptos por día escalan y los cargos únicos no
+  if (parseBreakdown(r.price_breakdown) || isOpenEnded(r.end_date)) {
+    const suggested = totalForDays({ id: r.id ?? '', ...r }, newDays)
+    const perDay = suggested != null && newDays > 0 ? round2(suggested / newDays) : null
+    return { oldDays, newDays, oldTotal, perDay, suggested }
+  }
   // Promedio por día de lo cobrado (incluye seguros e impuestos); si no hay total, la tarifa diaria
   const perDay = oldTotal != null ? oldTotal / oldDays : r.daily_rate != null ? Number(r.daily_rate) : null
   const suggested = oldTotal != null

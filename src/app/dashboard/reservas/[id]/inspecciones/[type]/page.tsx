@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { randomUUID } from 'crypto'
 import InspeccionForm from './InspeccionForm'
+import { previewClose, type CloseRow } from '@/lib/rentalClose'
 
 interface Props {
   params: Promise<{ id: string; type: string }>
@@ -35,7 +36,7 @@ export default async function InspeccionTypePage({ params, searchParams }: Props
 
   const { data: reservation } = await supabase
     .from('reservations')
-    .select('id, status, vehicle_id, vehicles ( brand, model, plates )')
+    .select('id, status, vehicle_id, start_date, end_date, total_amount, daily_rate, price_breakdown, vehicles ( brand, model, plates )')
     .eq('id', id)
     .eq('tenant_id', profile.tenant_id)
     .single()
@@ -112,6 +113,12 @@ export default async function InspeccionTypePage({ params, searchParams }: Props
       inspectionId={inspectionId}
       baselinePhotos={baselinePhotos}
       swapId={swapId}
+      closePreview={(() => {
+        // Recepción final: ¿se regresó tarde o no tenía fecha de retorno?
+        if (type !== 'checkin' || swapId) return null
+        const p = previewClose(reservation as unknown as CloseRow)
+        return p.needsAdjust ? p : null
+      })()}
     />
   )
 }

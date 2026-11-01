@@ -3,13 +3,16 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { rentalFolio } from '@/lib/rentalLabels'
-import { BREAKDOWN_SELECT, resolveBreakdown } from '@/lib/reservationPrices'
+import { BREAKDOWN_SELECT, resolveBreakdown, CARD_INSURANCES, CARD_INSURANCE_KEEPS } from '@/lib/reservationPrices'
+import { getContractTerms } from '@/lib/contractTerms'
+import { WaiverLetter, CardInsuranceDoc, TermsPage } from './ExtraPages'
 import { fmtUSD, fmtLocal, fmtRate, fmtPayment, toLocal, paymentToUSD, rentalRate, getCurrencySettings } from '@/lib/currency'
 import { EQUIPMENT_CONDITION, EQUIPMENT_TYPES, type EquipmentCondition, type EquipmentType } from '@/lib/equipment'
 import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
 import { redirect } from 'next/navigation'
 import PrintTrigger from './PrintTrigger'
 import PrintButton from './PrintButton'
+import { isOpenEnded, effectiveEnd } from '@/lib/openEnded'
 
 interface Props {
   params: Promise<{ id: string }>
@@ -212,7 +215,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
     .order('created_at', { ascending: false }).limit(1).maybeSingle()
 
   const nights = Math.ceil(
-    (new Date(reservation.end_date).getTime() - new Date(reservation.start_date).getTime()) / 86400000
+    (new Date(effectiveEnd(reservation.start_date, reservation.end_date)).getTime() - new Date(reservation.start_date).getTime()) / 86400000
   )
 
   // ── Anexo: equipo entregado y cargos adicionales (documentación de cargos) ──
@@ -312,6 +315,20 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const ctD2Tel = spD2Tel || reservation.additional_driver2_phone   || ''
   const ctEdad  = spEdad  || (reservation.driver_age != null ? String(reservation.driver_age) : '')
   const ctPets  = spMascotas || !!reservation.client_has_pets
+
+  // Hojas adicionales: carta de declinación, seguro de tarjeta y términos y condiciones
+  const cardIns = bd.card_insurance ?? null
+  const extraCommon = {
+    companyName, contratoNum,
+    clientName:  client?.full_name ?? '',
+    clientDoc:   [clientLicense && `Lic. ${clientLicense}`, clientPassport && `Pas. ${clientPassport}`].filter(Boolean).join(' · '),
+    vehicleText: vehicle ? `${vehicle.brand} ${vehicle.model} ${vehicle.year ?? ''} · ${vehicle.plates}` : '',
+    periodText:  `${fmt(reservation.start_date)} → ${isOpenEnded(reservation.end_date) ? 'SIN FECHA DE RETORNO' : fmt(reservation.end_date)}`,
+    todayText:   new Date().toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+  }
+  const declinedNames = insLines.filter(l => !l.checked).map(l => l.label)
+  const cardKeeps = insLines.filter(l => CARD_INSURANCE_KEEPS.includes(l.key)).map(l => l.label)
+  const contractTerms = getContractTerms(tenant?.settings)
   const ctDeduct = deductBas || (reservation.insurance_deductible != null ? fmtMoney(Number(reservation.insurance_deductible)) : '')
 
   const extraDriver = extras.find(e => e.extra_type === 'extra_driver')
@@ -527,7 +544,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     <Field label="COLOR DEL VEHÍCULO" value={vehicle?.color} />
                     <Field label="KM DE SALIDA DEL VEHÍCULO" value={checkout?.odometer} />
                     <Field label="FECHA SALIDA DEL VEHÍCULO" value={fmt(reservation.start_date)} />
-                    <Field label="FECHA ENTRADA DEL VEHÍCULO" value={fmt(reservation.end_date)} />
+                    <Field label="FECHA ENTRADA DEL VEHÍCULO" value={isOpenEnded(reservation.end_date) ? 'SIN FECHA DE RETORNO (ABIERTO)' : fmt(reservation.end_date)} />
                     <div className="grid2">
                       <Field label="VEHÍCULO RETORNA EN LAS MISMAS CONDICIONES" value="" />
                       <Field label="EDAD DEL CONDUCTOR" value={ctEdad} />
@@ -562,7 +579,11 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                             <InsuranceRow key={it.key} label={`${it.label.toUpperCase()}:`} price={insPrice(it.key)} status={insDecision(it.key)} />
                           ))}
                           <tr>
-                            <td colSpan={4} style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc' }}>DEDUCIBLE DEL SEGURO: {ctDeduct}</td>
+                            <td colSpan={4} style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc' }}>
+                              DEDUCIBLE DEL SEGURO: {ctDeduct}
+                              {bd.waive_all && <b> · EL CLIENTE DECLINÓ TODOS LOS SEGUROS (VER CARTA ANEXA)</b>}
+                              {cardIns && <b> · SEGURO DE TARJETA: {CARD_INSURANCES[cardIns].toUpperCase()} (VER DOCUMENTO ANEXO)</b>}
+                            </td>
                           </tr>
                         </tbody>
                       </table>
@@ -573,6 +594,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                       <tbody>
                         {/* Extras de la reserva (mismos conceptos que Nueva reserva) */}
                         {[
+                          ...bd.lines.filter(l => l.group === 'dropoff').map(l => [`DROP OFF: ${l.label.toUpperCase()}`, fmtAmt(l.amount)]),
                           ...extraLines.map(it => [`ADICIONALES: ${it.label.toUpperCase()}${it.checked && it.kind === 'per_day' ? ` (${bd.days} DÍA${bd.days !== 1 ? 'S' : ''} × ${fmtMoney(it.price)})` : ''}`, fmtAmt(it.amount)]),
                           ...(bLine('otros')?.checked ? [[`ADICIONALES: ${(bLine('otros')!.label).toUpperCase()}`, fmtAmt(bLine('otros')!.amount)]] : []),
                           ['ADICIONALES: UPGRADE DE VEHÍCULO', ''],
@@ -817,7 +839,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                   <Field label="FECHA - HORA" value={fmt(reservation.start_date)} />
                 </td>
                 <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <Field label="FECHA - HORA" value={fmt(reservation.end_date)} />
+                  <Field label="FECHA - HORA" value={isOpenEnded(reservation.end_date) ? '' : fmt(reservation.end_date)} />
                 </td>
               </tr>
               <tr>
@@ -881,6 +903,12 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
           </table>
 
         </div>{/* fin página 2 */}
+
+        {/* ── Carta de declinación de seguros (provisional) ────────────────── */}
+        {bd.waive_all && declinedNames.length > 0 && <WaiverLetter {...extraCommon} declined={declinedNames} />}
+
+        {/* ── Documento del seguro de tarjeta (provisional) ────────────────── */}
+        {cardIns && <CardInsuranceDoc {...extraCommon} cardName={CARD_INSURANCES[cardIns]} keeps={cardKeeps} />}
 
         {/* ── Anexo: equipo entregado y cargos adicionales ─────────────────── */}
         {hasAnnex && (
@@ -1032,6 +1060,9 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
             </table>
           </div>
         )}
+
+        {/* ── Términos y condiciones (siempre) ─────────────────────────────── */}
+        <TermsPage {...extraCommon} terms={contractTerms} />
 
       </div>
     </>

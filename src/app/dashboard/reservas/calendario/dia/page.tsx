@@ -10,6 +10,7 @@ import { calendarFromQuery, dayViewHref } from '@/lib/calendarReturn'
 import { EVENT_PEOPLE_SELECT, eventPeople, type CalendarEventRow, type CalendarEventType } from '@/lib/calendarEvents'
 import EventChip from '../EventChip'
 import DayAddMenu from '../DayAddMenu'
+import { isOpenEnded } from '@/lib/openEnded'
 
 interface Props { searchParams: Promise<{ fecha?: string }> }
 
@@ -165,7 +166,7 @@ function RentalList({ rows, when, back }: { rows: RentalRow[]; when: 'start' | '
                   </span>
                   <span className="block text-xs text-gray-500 truncate">
                     {r.vehicles ? `${r.vehicles.brand} ${r.vehicles.model} · ${r.vehicles.plates}` : '—'}
-                    {when === 'none' && <> · regresa {new Date(r.end_date).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}</>}
+                    {when === 'none' && <> · {isOpenEnded(r.end_date) ? 'sin fecha de retorno' : <>regresa {new Date(r.end_date).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}</>}</>}
                   </span>
                 </span>
                 <span className={`flex-shrink-0 px-2 py-0.5 text-xs font-medium rounded-full ${st.className}`}>{st.label}</span>

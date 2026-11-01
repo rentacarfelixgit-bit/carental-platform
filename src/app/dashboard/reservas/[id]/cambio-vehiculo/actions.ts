@@ -6,6 +6,9 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { SWAP_REASONS, quoteSwap, type SwapQuote, type SwapReason } from '@/lib/vehicleSwap'
+import { isOpenEnded } from '@/lib/openEnded'
+
+const OPEN_END_SWAP_ERROR = 'Esta renta no tiene fecha de retorno. Define primero la fecha de regreso (botón “Cambiar fecha de regreso”) para calcular el cambio de vehículo.'
 
 type Result = { error?: string; success?: boolean }
 
@@ -85,6 +88,7 @@ export async function previewVehicleSwap(reservationId: string, toVehicleId: str
   const { data: to } = await ctx.supabase.from('vehicles').select('daily_rate')
     .eq('id', toVehicleId).eq('tenant_id', ctx.tenantId).maybeSingle()
   if (!to) return { error: 'Vehículo no encontrado' }
+  if (isOpenEnded(r.end_date)) return { error: OPEN_END_SWAP_ERROR }
   const fromVehicle = r.vehicles as unknown as { daily_rate: number | null } | null
   return {
     quote: quoteSwap({
@@ -110,6 +114,7 @@ export async function startVehicleSwap(
   const to = candidates.find(c => c.id === input.toVehicleId)
   if (!to) return { error: 'Ese vehículo ya no está disponible para el resto de la renta.' }
 
+  if (isOpenEnded(r.end_date)) return { error: OPEN_END_SWAP_ERROR }
   const keepPrice = SWAP_REASONS[input.reason].keepPrice
   const fromVehicle = r.vehicles as unknown as { daily_rate: number | null } | null
   const fromRate = r.daily_rate ?? fromVehicle?.daily_rate ?? null

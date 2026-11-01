@@ -5,6 +5,7 @@
 // para que el contrato impreso — y cualquier reimpresión — muestre exactamente esos datos.
 
 import { createClient } from '@/lib/supabase/server'
+import { isOpenEnded } from '@/lib/openEnded'
 import { revalidatePath } from 'next/cache'
 import {
   parseBreakdown, computeBreakdown, selectionFromBreakdown, catalogFromBreakdown, rentalDaysBetween, insuranceColumns,
@@ -85,7 +86,7 @@ export async function saveContractDetails(
   if (formData.get('pricing_changed') === '1') {
     const sent = parseBreakdown(formData.get('price_breakdown')?.toString() ?? '')
     if (!sent) return { error: 'No se pudo leer el desglose de precios.' }
-    const b = computeBreakdown({ ...selectionFromBreakdown(sent), days: rentalDaysBetween(r.start_date, r.end_date) }, catalogFromBreakdown(sent))
+    const b = computeBreakdown({ ...selectionFromBreakdown(sent), days: isOpenEnded(r.end_date) ? 1 : rentalDaysBetween(r.start_date, r.end_date) }, catalogFromBreakdown(sent))
     update.price_breakdown = b
     update.total_amount = b.total
     update.daily_rate = b.daily_rate

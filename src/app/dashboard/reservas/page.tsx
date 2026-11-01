@@ -9,6 +9,7 @@ import StatusBadge, { STATUS_CONFIG } from './StatusBadge'
 import { rentalFolio } from '@/lib/rentalLabels'
 import { parseSort, sortOrders, applySortParams, RENTAL_SORT_KEYS, RENTAL_SORT_COLUMNS, type SortState } from '@/lib/tableSort'
 import { SortLinkTh } from '@/components/dashboard/SortableTh'
+import { isOpenEnded, effectiveEnd } from '@/lib/openEnded'
 
 const PAGE_SIZE = 20
 const ALL_STATUSES = Object.entries(STATUS_CONFIG).map(([value, { label }]) => ({ value, label }))
@@ -144,7 +145,7 @@ export default async function ReservasPage({ searchParams }: Props) {
                   const client  = r.clients  as unknown as { full_name: string; id_number: string } | null
                   const vehicle = r.vehicles as unknown as { plates: string; brand: string; model: string } | null
                   const nights  = Math.ceil(
-                    (new Date(r.end_date).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
+                    (new Date(effectiveEnd(r.start_date, r.end_date)).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
                   )
                   return (
                     <tr key={r.id} className="hover:bg-gray-50 transition-colors">
@@ -159,7 +160,7 @@ export default async function ReservasPage({ searchParams }: Props) {
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell text-xs text-gray-600">
                         <p>{new Date(r.start_date).toLocaleDateString('es-MX')} →</p>
-                        <p>{new Date(r.end_date).toLocaleDateString('es-MX')} <span className="text-gray-400">({nights}d)</span></p>
+                        <p>{isOpenEnded(r.end_date) ? <span className="text-amber-700">Sin fecha de retorno</span> : new Date(r.end_date).toLocaleDateString('es-MX')} <span className="text-gray-400">({nights}d{isOpenEnded(r.end_date) ? ' a hoy' : ''})</span></p>
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={r.status} />

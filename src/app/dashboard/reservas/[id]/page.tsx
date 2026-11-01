@@ -9,7 +9,7 @@ import ReservationActions from './ReservationActions'
 import ContratoButton from './ContratoButton'
 import AuditHistoryLink from '@/components/dashboard/AuditHistoryLink'
 import { rentalFolio, rentalSection, rentalTitle } from '@/lib/rentalLabels'
-import { BREAKDOWN_SELECT, resolveBreakdown, getReservationPrices, getPriceCatalog, catalogFromBreakdown, mergeCatalog } from '@/lib/reservationPrices'
+import { BREAKDOWN_SELECT, resolveBreakdown, getReservationPrices, getPriceCatalog, catalogFromBreakdown, mergeCatalog, getDropoffLocations } from '@/lib/reservationPrices'
 import { fmtUSD, fmtLocal, fmtRate, fmtPayment, toLocal, paymentToUSD, rentalRate, getCurrencySettings } from '@/lib/currency'
 import { parseCalendarReturn, calendarHref } from '@/lib/calendarReturn'
 import RentalEvents from '../calendario/RentalEvents'
@@ -17,6 +17,7 @@ import ChangeReturnDateButton from './ChangeReturnDateButton'
 import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
 import RentalEquipmentSection, { type RentalEquipmentRow, type RentalChargeRow } from './RentalEquipmentSection'
 import { EVENT_PEOPLE_SELECT, eventPeople, type CalendarEventRow, type CalendarEventType } from '@/lib/calendarEvents'
+import { isOpenEnded, effectiveEnd } from '@/lib/openEnded'
 
 const EXTRA_LABELS: Record<string, string> = {
   gps:          'GPS',
@@ -207,7 +208,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
   const isContract = reservation.origin === 'walk_in'
 
   const nights = Math.ceil(
-    (new Date(reservation.end_date).getTime() - new Date(reservation.start_date).getTime()) / (1000 * 60 * 60 * 24)
+    (new Date(effectiveEnd(reservation.start_date, reservation.end_date)).getTime() - new Date(reservation.start_date).getTime()) / (1000 * 60 * 60 * 24)
   )
 
   return (
@@ -321,6 +322,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
           reservationId={reservation.id}
           defaultPrices={getReservationPrices(tenantRow?.settings)}
           currency={getCurrencySettings(tenantRow?.settings)}
+          dropoffLocations={getDropoffLocations(tenantRow?.settings)}
           catalog={mergeCatalog(
             // Conceptos tal como se eligieron en esta renta + los que el negocio tenga ahora
             catalogFromBreakdown(resolveBreakdown(reservation).breakdown),
@@ -374,7 +376,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
             </div>
             <div>
               <p className="text-xs text-gray-400 mb-0.5">Regreso</p>
-              <p className="font-medium text-gray-900">{new Date(reservation.end_date).toLocaleString('es-MX')}</p>
+              <p className="font-medium text-gray-900">{isOpenEnded(reservation.end_date) ? <span className="text-amber-700">Sin fecha de retorno</span> : new Date(reservation.end_date).toLocaleString('es-MX')}</p>
             </div>
           </div>
           <div className="flex flex-wrap items-end justify-between gap-3 mt-3">
@@ -385,7 +387,9 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
                   // Todo en US$; la moneda local solo al final (tasa congelada de esta renta)
                   const cur      = getCurrencySettings(tenantRow?.settings)
                   const rate     = rentalRate(reservation.exchange_rate, cur)
-                  const base     = Number(reservation.total_amount)
+                  // Sin fecha de retorno: total estimado a la fecha (días transcurridos)
+                  const prNow    = resolveBreakdown(reservation)
+                  const base     = prNow.openEnded ? prNow.total : Number(reservation.total_amount)
                   const grand    = base + chargesTotal
                   const cash     = Number(reservation.cash_payment) || 0
                   const card     = Number(reservation.card_payment) || 0
@@ -393,7 +397,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
                   const local    = toLocal(grand, rate)
                   return (
                     <>
-                      <p className="text-xs text-gray-400">Total</p>
+                      <p className="text-xs text-gray-400">{prNow.openEnded ? `Total estimado a hoy (${prNow.days} día${prNow.days !== 1 ? 's' : ''})` : 'Total'}</p>
                       <p className="text-base font-semibold text-gray-900">{fmtUSD(base)}</p>
                       {chargesTotal > 0 && (
                         <p className="text-xs text-gray-600">
@@ -434,7 +438,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
               {changes.map(ch => {
                 const who = (Array.isArray(ch.creator) ? ch.creator[0] : ch.creator) as { full_name: string } | null
                 const det = (ch.details ?? {}) as { old_days?: number; new_days?: number; manually_adjusted?: boolean; kind?: string; swap_reason?: string; keep_price?: boolean; days_used?: number; days_remaining?: number }
-                const fmtD = (d: string | null) => d ? new Date(d).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }) : '—'
+                const fmtD = (d: string | null) => !d ? '—' : isOpenEnded(d) ? 'Sin fecha de retorno' : new Date(d).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })
                 const fmtM = (n: number | string | null) => fmtUSD(n)
                 if (ch.type === 'vehicle_change') {
                   return (
@@ -528,7 +532,7 @@ export default async function ReservaDetailPage({ params, searchParams }: Props)
           reservationId={reservation.id}
           rentalLabel={rentalLabel}
           events={linkedEvents}
-          defaultDate={reservation.status === 'active' ? reservation.end_date.slice(0, 10) : todayStr}
+          defaultDate={reservation.status === 'active' && !isOpenEnded(reservation.end_date) ? reservation.end_date.slice(0, 10) : todayStr}
         />
 
         {/* Extras */}

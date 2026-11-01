@@ -8,6 +8,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { REQUIRED_INSPECTION_ANGLES, PHOTO_ANGLES, angleLabel } from '@/lib/photoAngles'
 import { finalizeVehicleSwapIfComplete } from '@/lib/vehicleSwapFinalize'
+import { applyCloseAdjustment, previewClose, readCloseChoice, closeChoiceError, type CloseRow } from '@/lib/rentalClose'
 
 const VALID_TYPES      = ['checkout', 'checkin']     as const
 const VALID_FUEL       = ['full', 'three_quarters', 'half', 'quarter', 'empty'] as const
@@ -133,6 +134,17 @@ export async function createInspection(
     if ((openSwaps ?? 0) > 0) return { error: 'Hay un cambio de vehículo en proceso. Termínalo antes de registrar la recepción final.' }
   }
 
+  // ── Regreso anticipado: quien cierra debe elegir cómo cobrar (antes de guardar nada) ──
+  if (!swapId && parsed.data.type === 'checkin') {
+    const { data: rc } = await ctx.supabase.from('reservations')
+      .select('id, start_date, end_date, total_amount, daily_rate, price_breakdown')
+      .eq('id', reservationId).eq('tenant_id', ctx.tenantId).single()
+    if (rc) {
+      const msg = closeChoiceError(previewClose(rc as CloseRow), readCloseChoice(formData))
+      if (msg) return { error: msg }
+    }
+  }
+
   // ── Validar fotos (mismas reglas que el formulario) ─────────────────────────
   const photos = readPhotos(formData)
   const { count: baselineCount } = await ctx.supabase
@@ -221,6 +233,12 @@ export async function createInspection(
     revalidatePath('/dashboard/flota')
     // Cambio terminado → al detalle de la renta (ya con el vehículo nuevo); si falta la entrega → al cambio
     redirect(finished ? `/dashboard/reservas/${reservationId}?cambio=ok` : `/dashboard/reservas/${reservationId}/cambio-vehiculo`)
+  }
+
+  // ── Cierre: regreso tardío o renta sin fecha de retorno → ajustar fecha y total ──
+  if (parsed.data.type === 'checkin') {
+    const adj = await applyCloseAdjustment(ctx.supabase, ctx.tenantId, ctx.user.id, reservationId, readCloseChoice(formData))
+    if (adj.error) return { error: `La inspección se guardó, pero no se pudo ajustar el total: ${adj.error}` }
   }
 
   // ── Auto-sync de estados ─────────────────────────────────────────────────────

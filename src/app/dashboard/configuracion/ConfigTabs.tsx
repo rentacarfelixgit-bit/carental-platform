@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
-export type ConfigTabId = 'negocio' | 'moneda' | 'impuestos' | 'precios' | 'tarifas'
+export type ConfigTabId = 'negocio' | 'moneda' | 'impuestos' | 'precios' | 'tarifas' | 'terminos'
 
 export interface ConfigTab {
   id: ConfigTabId

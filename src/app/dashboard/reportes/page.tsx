@@ -9,6 +9,7 @@ import {
   parseSort, sortOrders, sortRows, RENTAL_SORT_KEYS, RENTAL_SORT_COLUMNS, type SortState,
 } from '@/lib/tableSort'
 import { SortLinkTh } from '@/components/dashboard/SortableTh'
+import { isOpenEnded, effectiveEnd } from '@/lib/openEnded'
 
 // Cada tabla de la página tiene su propio orden en la URL
 const FLEET_SORT_KEYS = ['vehiculo', 'placas', 'reservas', 'dias'] as const
@@ -184,7 +185,7 @@ export default async function ReportesPage({ searchParams }: Props) {
     const completedReservations = v.reservations.filter(r => r.status !== 'cancelled')
     const totalDays = completedReservations.reduce((sum, r) => {
       const days = Math.ceil(
-        (new Date(r.end_date).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
+        (new Date(effectiveEnd(r.start_date, r.end_date)).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
       )
       return sum + Math.max(0, days)
     }, 0)
@@ -403,7 +404,7 @@ export default async function ReportesPage({ searchParams }: Props) {
                   const c = r.clients  as unknown as { full_name: string } | null
                   const v = r.vehicles as unknown as { plates: string; brand: string; model: string } | null
                   const nights = Math.ceil(
-                    (new Date(r.end_date).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
+                    (new Date(effectiveEnd(r.start_date, r.end_date)).getTime() - new Date(r.start_date).getTime()) / (1000 * 60 * 60 * 24)
                   )
                   return (
                     <tr key={r.id} className="hover:bg-gray-50">

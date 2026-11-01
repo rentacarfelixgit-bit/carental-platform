@@ -14,6 +14,7 @@ import {
 import { sortRows } from '@/lib/tableSort'
 import { useTableSort } from '@/lib/useTableSort'
 import { SortButtonTh } from '@/components/dashboard/SortableTh'
+import { isOpenEnded } from '@/lib/openEnded'
 
 export interface InventoryItem {
   id: string
@@ -122,7 +123,7 @@ export default function EquipmentInventory({ items, isAdmin }: { items: Inventor
                         <Link href={`/dashboard/reservas/${it.holder.reservationId}`} className="hover:underline">
                           <span className="font-mono text-gray-700">{it.holder.folio}</span>
                           <span className="text-gray-600"> · {it.holder.client}</span>
-                          <span className="block text-gray-400">regresa {new Date(it.holder.due).toLocaleDateString('es-MX')}</span>
+                          <span className="block text-gray-400">{isOpenEnded(it.holder.due) ? 'sin fecha de retorno' : `regresa ${new Date(it.holder.due).toLocaleDateString('es-MX')}`}</span>
                         </Link>
                       ) : <span className="text-gray-400">—</span>}
                     </td>

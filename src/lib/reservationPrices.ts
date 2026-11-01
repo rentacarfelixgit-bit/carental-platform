@@ -1,4 +1,5 @@
 // src/lib/reservationPrices.ts
+import { isOpenEnded, effectiveEnd } from './openEnded'
 // Catálogo de seguros, extras e impuestos de las rentas y sus precios por defecto (en US$).
 //
 // - Conceptos base (los de siempre) + conceptos que cada negocio crea en Configuración.
@@ -161,7 +162,51 @@ export function mergeCatalog(primary: PriceItem[], extra: PriceItem[]): PriceCat
 // en reservations.price_breakdown para que el contrato muestre exactamente lo mismo.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type BreakdownGroup = PriceGroup | 'other'
+export type BreakdownGroup = PriceGroup | 'other' | 'dropoff'
+
+// ── Seguro de tarjeta ───────────────────────────────────────────────────────
+export type CardInsurance = 'amex' | 'visa' | 'mastercard'
+export const CARD_INSURANCES: Record<CardInsurance, string> = {
+  amex: 'American Express', visa: 'Visa', mastercard: 'Mastercard',
+}
+/** Con seguro de tarjeta se declinan todos los seguros menos estos (Gomas y cristales, Liability) */
+export const CARD_INSURANCE_KEEPS = ['tw', 'lia']
+export const isCardInsurance = (v: unknown): v is CardInsurance => v === 'amex' || v === 'visa' || v === 'mastercard'
+
+/** ¿El seguro queda forzado a "declinado" por "declinar todos" o por el seguro de tarjeta? */
+export function insuranceLocked(key: string, waiveAll?: boolean, card?: CardInsurance | null): boolean {
+  return !!waiveAll || (!!card && !CARD_INSURANCE_KEEPS.includes(key))
+}
+
+// ── Drop off (entregar / recoger el vehículo en otra ubicación) ─────────────
+export interface DropoffLocation { code: string; label: string }
+export const DEFAULT_DROPOFF_LOCATIONS: DropoffLocation[] = [
+  { code: 'sdq_apt',  label: 'Aeropuerto SDQ' },
+  { code: 'sdq_city', label: 'SDQ Ciudad' },
+  { code: 'puj_apt',  label: 'Aeropuerto PUJ' },
+  { code: 'puj_city', label: 'PUJ Ciudad' },
+  { code: 'pop_apt',  label: 'Aeropuerto PoP' },
+  { code: 'pop_city', label: 'PoP Ciudad' },
+  { code: 'otros',    label: 'Otros' },
+]
+export const MAX_DROPOFFS = 6
+export interface DropoffLine { location: string; label: string; price: number }
+
+/** Ubicaciones de Drop off del negocio (Configuración); "Otros" siempre está al final */
+export function getDropoffLocations(settings: unknown): DropoffLocation[] {
+  const raw = settingsObj(settings).dropoff_locations
+  const list: DropoffLocation[] = []
+  if (Array.isArray(raw)) {
+    for (const r of raw as Partial<DropoffLocation>[]) {
+      const code = String(r?.code ?? '')
+      const label = String(r?.label ?? '').trim().slice(0, 60)
+      if (/^[a-z0-9_]{1,30}$/.test(code) && label && code !== 'otros' && !list.some(l => l.code === code)) list.push({ code, label })
+    }
+  } else {
+    list.push(...DEFAULT_DROPOFF_LOCATIONS.filter(l => l.code !== 'otros'))
+  }
+  return [...list, { code: 'otros', label: 'Otros' }]
+}
 
 export interface BreakdownLine {
   key: string
@@ -174,6 +219,8 @@ export interface BreakdownLine {
   checked: boolean
   /** Importe que suma al total (0 si no está marcado) */
   amount: number
+  /** Dato extra: en Drop off, el código de la ubicación */
+  meta?: string
 }
 
 export interface PriceBreakdown {
@@ -188,6 +235,12 @@ export interface PriceBreakdown {
   taxes_total: number
   total: number
   lines: BreakdownLine[]
+  /** Drop off (incluido en extras_total) */
+  dropoff_total?: number
+  /** El cliente declinó todos los seguros (se imprime la carta de declinación) */
+  waive_all?: boolean
+  /** Seguro de la tarjeta del cliente (declina todos menos Gomas y cristales y Liability) */
+  card_insurance?: CardInsurance | null
 }
 
 export interface PriceSelection {
@@ -196,6 +249,9 @@ export interface PriceSelection {
   checked: Record<string, boolean>
   prices: Record<string, number>
   otros?: { label: string; price: number; checked: boolean }
+  waiveAll?: boolean
+  cardInsurance?: CardInsurance | null
+  dropoffs?: DropoffLine[]
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100
@@ -215,9 +271,11 @@ export function computeBreakdown(sel: PriceSelection, items: PriceItem[] = BUILT
   const amountOf = (it: PriceItem, base: number) =>
     it.kind === 'per_day' ? price(it.key) * days : it.kind === 'pct' ? base * (price(it.key) / 100) : price(it.key)
 
+  const waiveAll = !!sel.waiveAll
+  const card = isCardInsurance(sel.cardInsurance) ? sel.cardInsurance : null
   let insurance = 0
   for (const it of cat.insurance) {
-    const checked = !!sel.checked[it.key]
+    const checked = !!sel.checked[it.key] && !insuranceLocked(it.key, waiveAll, card)
     const amount = checked ? amountOf(it, 0) : 0
     insurance += amount
     lines.push({ key: it.key, group: 'insurance', label: it.label, kind: it.kind, price: price(it.key), checked, amount: r2(amount) })
@@ -235,6 +293,14 @@ export function computeBreakdown(sel: PriceSelection, items: PriceItem[] = BUILT
     lines.push({ key: 'otros', group: 'other', label: sel.otros.label.trim().slice(0, 80) || 'Otros', kind: 'flat',
       price: Math.max(0, sel.otros.price || 0), checked: sel.otros.checked, amount: r2(amount) })
   }
+  let dropoff = 0
+  ;(sel.dropoffs ?? []).slice(0, MAX_DROPOFFS).forEach((d, i) => {
+    const amount = Math.max(0, Number(d.price) || 0)
+    dropoff += amount
+    lines.push({ key: `drop_${i + 1}`, group: 'dropoff', label: String(d.label || 'Drop off').trim().slice(0, 80),
+      kind: 'flat', price: amount, checked: true, amount: r2(amount), meta: String(d.location || 'otros').slice(0, 30) })
+  })
+  extras += dropoff
   const taxBase = rental + insurance
   let taxes = 0
   for (const it of cat.tax) {
@@ -250,13 +316,16 @@ export function computeBreakdown(sel: PriceSelection, items: PriceItem[] = BUILT
     subtotal: r2(rental + insurance + extras), taxes_total: r2(taxes),
     total: r2(rental + insurance + extras + taxes),
     lines,
+    dropoff_total: r2(dropoff),
+    waive_all: waiveAll,
+    card_insurance: card,
   }
 }
 
 /** Conceptos (con nombre y tipo) tal como quedaron guardados en un desglose */
 export function catalogFromBreakdown(b: PriceBreakdown): PriceItem[] {
   return b.lines
-    .filter(l => l.key !== 'otros' && l.group !== 'other')
+    .filter(l => l.key !== 'otros' && l.group !== 'other' && l.group !== 'dropoff')
     .map(l => ({ key: l.key, label: l.label, kind: l.kind, group: l.group as PriceGroup, fallback: 0 }))
 }
 
@@ -265,12 +334,15 @@ export function selectionFromBreakdown(b: PriceBreakdown, days = b.days): PriceS
   const checked: Record<string, boolean> = {}
   const prices: Record<string, number> = {}
   let otros: PriceSelection['otros']
+  const dropoffs: DropoffLine[] = []
   for (const l of b.lines) {
     if (l.key === 'otros') { otros = { label: l.label, price: l.price, checked: l.checked }; continue }
+    if (l.group === 'dropoff') { dropoffs.push({ location: l.meta ?? 'otros', label: l.label, price: l.price }); continue }
     checked[l.key] = l.checked
     prices[l.key] = l.price
   }
-  return { days, dailyRate: b.daily_rate, checked, prices, otros }
+  return { days, dailyRate: b.daily_rate, checked, prices, otros, dropoffs,
+    waiveAll: !!b.waive_all, cardInsurance: isCardInsurance(b.card_insurance) ? b.card_insurance : null }
 }
 
 /**
@@ -285,7 +357,10 @@ export function parseBreakdown(raw: unknown): PriceBreakdown | null {
   const o = obj as Partial<PriceBreakdown>
   if (o.v !== 1 || !Array.isArray(o.lines)) return null
 
-  const sel: PriceSelection = { days: Number(o.days) || 0, dailyRate: Number(o.daily_rate) || 0, checked: {}, prices: {} }
+  const sel: PriceSelection = {
+    days: Number(o.days) || 0, dailyRate: Number(o.daily_rate) || 0, checked: {}, prices: {},
+    waiveAll: o.waive_all === true, cardInsurance: isCardInsurance(o.card_insurance) ? o.card_insurance : null, dropoffs: [],
+  }
   const items: PriceItem[] = []
   const seen = new Set<string>()
   for (const l of (o.lines as Partial<BreakdownLine>[]).slice(0, 80)) {
@@ -293,6 +368,10 @@ export function parseBreakdown(raw: unknown): PriceBreakdown | null {
     seen.add(l.key)
     if (l.key === 'otros') {
       sel.otros = { label: String(l.label ?? 'Otros').slice(0, 80), price: Number(l.price) || 0, checked: !!l.checked }
+      continue
+    }
+    if (l.group === 'dropoff') {
+      sel.dropoffs!.push({ location: String(l.meta ?? 'otros'), label: String(l.label ?? 'Drop off'), price: Number(l.price) || 0 })
       continue
     }
     if (!isGroup(l.group) || !isKind(l.kind)) continue
@@ -366,7 +445,9 @@ type BreakdownSource = {
  * total editado a mano al extender), para que el contrato cuadre con el total de la reserva.
  */
 export function resolveBreakdown(r: BreakdownSource) {
-  const days = rentalDaysBetween(r.start_date, r.end_date)
+  // Sin fecha de retorno: días transcurridos hasta hoy (total estimado a la fecha)
+  const openEnded = isOpenEnded(r.end_date)
+  const days = Math.max(1, rentalDaysBetween(r.start_date, effectiveEnd(r.start_date, r.end_date)))
   const saved = parseBreakdown(r.price_breakdown)
   const total = r.total_amount != null ? Number(r.total_amount) : null
   const n = (v: number | string | null | undefined) => v == null ? null : Number(v)
@@ -381,13 +462,15 @@ export function resolveBreakdown(r: BreakdownSource) {
           at:  { accepted: r.insurance_at_accepted  ?? null, price: n(r.insurance_at_price) },
         },
       })
-  const adjustment = total != null ? r2(total - breakdown.total) : 0
+  // Con fecha abierta el total guardado es un estimado de 1 día: manda el desglose a la fecha
+  const adjustment = total != null && !openEnded ? r2(total - breakdown.total) : 0
   return {
     days,
     breakdown,
     hasSavedBreakdown: !!saved,
-    /** Total final de la renta (el guardado manda) */
-    total: total ?? breakdown.total,
+    openEnded,
+    /** Total final de la renta (el guardado manda; sin fecha de retorno, el estimado a la fecha) */
+    total: openEnded ? breakdown.total : total ?? breakdown.total,
     adjustment: Math.abs(adjustment) >= 0.01 ? adjustment : 0,
   }
 }

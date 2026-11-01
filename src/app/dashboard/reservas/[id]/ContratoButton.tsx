@@ -9,10 +9,13 @@
 import { useActionState, useRef, useState } from 'react'
 import { saveContractDetails, type ContractDetailsState } from './contractActions'
 import {
-  computeBreakdown, selectionFromBreakdown,
+  computeBreakdown, selectionFromBreakdown, insuranceLocked,
   type PriceBreakdown, type PriceItem, type PriceCatalog, type ReservationPrices,
+  type DropoffLocation, type CardInsurance,
 } from '@/lib/reservationPrices'
 import { fmtUSD, fmtLocal, toLocal, type CurrencySettings } from '@/lib/currency'
+import { InsuranceWaiverControls, DeclinedInsurancesList, declinedInsurances } from '@/components/dashboard/rental/InsuranceWaiver'
+import DropoffEditor, { dropoffsForBreakdown, type DropoffDraft } from '@/components/dashboard/rental/DropoffEditor'
 
 export interface ClientForContrato {
   id: string
@@ -61,6 +64,8 @@ interface Props {
   currency: CurrencySettings
   /** Conceptos de esta renta + los del catálogo actual del negocio (para poder agregarlos) */
   catalog: PriceCatalog
+  /** Ubicaciones de Drop off (Configuración) */
+  dropoffLocations: DropoffLocation[]
 }
 
 const money = (n: number) => fmtUSD(n)
@@ -101,7 +106,7 @@ function PriceInput({ value, onChange, disabled }: { value: string; onChange: (v
   )
 }
 
-export default function ContratoButton({ reservationId, client, contract, defaultPrices, currency, catalog }: Props) {
+export default function ContratoButton({ reservationId, client, contract, defaultPrices, currency, catalog, dropoffLocations }: Props) {
   const [open, setOpen] = useState(false)
   const printWin = useRef<Window | null>(null)
 
@@ -142,6 +147,15 @@ export default function ContratoButton({ reservationId, client, contract, defaul
   const [otrosLabel,   setOtrosLabel]   = useState(initial.otros?.label ?? '')
   const [otrosPrice,   setOtrosPrice]   = useState(initial.otros?.price ? String(initial.otros.price) : '')
   const [otrosChecked, setOtrosChecked] = useState(initial.otros?.checked ?? false)
+  // Declinar todos / seguro de tarjeta / drop off (vienen de la reserva)
+  const [waiveAll, setWaiveAllRaw] = useState(!!initial.waiveAll)
+  const [cardIns, setCardInsRaw]   = useState<CardInsurance | null>(initial.cardInsurance ?? null)
+  const [dropoffLines, setDropoffLinesRaw] = useState<DropoffDraft[]>(() =>
+    (initial.dropoffs ?? []).map((d, i) => ({
+      id: `saved${i}`, location: d.location,
+      label: d.location === 'otros' ? d.label.replace(/^Otros:\s*/, '').replace(/^Otros$/, '') : d.label,
+      price: d.price ? String(d.price) : '',
+    })))
   const [deductible,   setDeductible]   = useState(contract.deductible != null ? String(contract.deductible) : '')
   const [pricingChanged, setPricingChanged] = useState(false)
   // Tasa de esta renta (editable); si la renta no tenía, se precarga la de Configuración
@@ -152,6 +166,9 @@ export default function ContratoButton({ reservationId, client, contract, defaul
   const rateNum = parseFloat(exchangeRate) || 0
 
   const touch = () => setPricingChanged(true)
+  const setWaiveAll = (v: boolean) => { setWaiveAllRaw(v); touch() }
+  const setCardIns = (v: CardInsurance | null) => { setCardInsRaw(v); touch() }
+  const setDropoffLines = (v: DropoffDraft[]) => { setDropoffLinesRaw(v); touch() }
   const toggle = (key: string, v: boolean) => { setChecked(p => ({ ...p, [key]: v })); touch() }
   const setPrice = (key: string, v: string) => { setPrices(p => ({ ...p, [key]: v })); touch() }
 
@@ -161,7 +178,12 @@ export default function ContratoButton({ reservationId, client, contract, defaul
     checked,
     prices: Object.fromEntries(catalog.all.map(i => [i.key, parseFloat(prices[i.key] || '0') || 0])),
     otros: { label: otrosLabel, price: parseFloat(otrosPrice || '0') || 0, checked: otrosChecked },
+    waiveAll,
+    cardInsurance: cardIns,
+    dropoffs: dropoffsForBreakdown(dropoffLines, dropoffLocations),
   }, catalog.all)
+  const declined = (waiveAll || cardIns) ? declinedInsurances(catalog.insurance, checked, waiveAll, cardIns) : []
+  const locked = (key: string) => insuranceLocked(key, waiveAll, cardIns)
   const line = (key: string) => breakdown.lines.find(l => l.key === key)
 
   // Total que quedará en el contrato
@@ -406,6 +428,10 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                   <span className="ml-auto text-gray-500">Renta: <b className="text-gray-800">{money(breakdown.rental_subtotal)}</b></span>
                 </div>
 
+                {/* Declinar todos / seguro de tarjeta */}
+                <InsuranceWaiverControls compact waiveAll={waiveAll} onWaiveAll={setWaiveAll}
+                  card={cardIns} onCard={setCardIns} disabled={pending} />
+
                 {/* Seguros: aceptar / declinar */}
                 <div className="rounded-xl border border-gray-200 overflow-x-auto">
                   <table className="w-full text-xs min-w-[480px]">
@@ -429,21 +455,22 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                             </div>
                           </td>
                           <td className="px-3 py-2 border-l border-gray-200 text-center">
-                            <input type="radio" name={`ins_${it.key}`} checked={!!checked[it.key]}
-                              onChange={() => toggle(it.key, true)} disabled={pending} className="accent-green-600" />
+                            <input type="radio" name={`ins_${it.key}`} checked={!!checked[it.key] && !locked(it.key)}
+                              onChange={() => toggle(it.key, true)} disabled={pending || locked(it.key)} className="accent-green-600 disabled:opacity-40" />
                           </td>
                           <td className="px-3 py-2 border-l border-gray-200 text-center">
-                            <input type="radio" name={`ins_${it.key}`} checked={!checked[it.key]}
-                              onChange={() => toggle(it.key, false)} disabled={pending} className="accent-red-600" />
+                            <input type="radio" name={`ins_${it.key}`} checked={!checked[it.key] || locked(it.key)}
+                              onChange={() => toggle(it.key, false)} disabled={pending || locked(it.key)} className="accent-red-600" />
                           </td>
                           <td className="px-3 py-2 border-l border-gray-200 text-right text-gray-700 whitespace-nowrap">
-                            {checked[it.key] ? money(line(it.key)?.amount ?? 0) : '—'}
+                            {line(it.key)?.checked ? money(line(it.key)?.amount ?? 0) : '—'}
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                {declined.length > 0 && <DeclinedInsurancesList compact items={declined} />}
                 <div className="flex items-center gap-2 text-xs">
                   <span className="text-gray-600">Deducible del seguro</span>
                   <span className="text-gray-400">US$</span>
@@ -481,6 +508,12 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                       )}
                     </div>
                   ))}
+                </div>
+
+                {/* Drop off */}
+                <div className="rounded-xl border border-gray-200 p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase mb-2">Drop off</p>
+                  <DropoffEditor compact lines={dropoffLines} onChange={setDropoffLines} locations={dropoffLocations} disabled={pending} />
                 </div>
 
                 {/* Resumen: igual que el que sale en el contrato */}

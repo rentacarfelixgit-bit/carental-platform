@@ -73,6 +73,7 @@ export async function saveTaxSettings(taxes: {
 
 // ── Guardar tarifa de un vehículo ────────────────────────────────────────────
 export async function saveVehicleRate(vehicleId: string, dailyRate: number) {
+  if (!Number.isFinite(dailyRate) || dailyRate <= 0) return { error: 'La tarifa diaria debe ser mayor a 0.' }
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'No autenticado' }
@@ -98,6 +99,8 @@ export async function saveAllVehicleRates(
   entries: { vehicleId: string; dailyRate: number }[]
 ): Promise<{ success?: boolean; error?: string; failed?: string[] }> {
   if (entries.length === 0) return { success: true }
+  if (entries.some(e => !Number.isFinite(e.dailyRate) || e.dailyRate <= 0))
+    return { error: 'Todas las tarifas deben ser mayores a 0.' }
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -225,5 +228,72 @@ export async function saveCurrencySettings(input: {
   revalidatePath('/dashboard/configuracion')
   revalidatePath('/dashboard/reservas/nueva')
   revalidatePath('/dashboard/contratos/nuevo')
+  return { success: true }
+}
+
+// ── Ubicaciones de Drop off ─────────────────────────────────────────────────
+export async function saveDropoffLocations(locations: { code: string; label: string }[]): Promise<{ success?: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autenticado' }
+  const { data: profile } = await supabase
+    .from('users').select('tenant_id, role').eq('id', user.id).single()
+  if (!profile || (profile.role !== 'admin' && profile.role !== 'superadmin')) return { error: 'Sin permisos' }
+
+  if (!Array.isArray(locations) || locations.length > 40) return { error: 'Máximo 40 ubicaciones.' }
+  const clean: { code: string; label: string }[] = []
+  for (const l of locations) {
+    const label = String(l?.label ?? '').trim().replace(/\s+/g, ' ').slice(0, 60)
+    const code = String(l?.code ?? '')
+    if (!label) return { error: 'Cada ubicación necesita un nombre.' }
+    if (!/^[a-z0-9_]{1,30}$/.test(code) || code === 'otros') return { error: `Ubicación inválida: "${label}"` }
+    if (clean.some(c => c.code === code)) continue
+    if (clean.some(c => c.label.toLowerCase() === label.toLowerCase())) return { error: `"${label}" está repetida.` }
+    clean.push({ code, label })
+  }
+
+  const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', profile.tenant_id).single()
+  const current = (tenant?.settings as Record<string, unknown>) ?? {}
+  const { error } = await supabase.from('tenants')
+    .update({ settings: { ...current, dropoff_locations: clean } }).eq('id', profile.tenant_id)
+  if (error) return { error: error.message }
+  revalidatePath('/dashboard/configuracion')
+  return { success: true }
+}
+
+// ── Términos y condiciones del contrato + reglas adicionales ────────────────
+export async function saveContractTerms(input: {
+  text: string
+  rules: { id: string; text: string; added_at: string }[]
+}): Promise<{ success?: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'No autenticado' }
+  const { data: profile } = await supabase
+    .from('users').select('tenant_id, role').eq('id', user.id).single()
+  if (!profile || (profile.role !== 'admin' && profile.role !== 'superadmin')) return { error: 'Sin permisos' }
+
+  const text = String(input.text ?? '').trim()
+  if (text.length > 30000) return { error: 'El texto es demasiado largo (máx. 30,000 caracteres).' }
+  if (!Array.isArray(input.rules) || input.rules.length > 50) return { error: 'Máximo 50 reglas adicionales.' }
+  const today = new Date().toISOString().slice(0, 10)
+  const rules = []
+  for (const r of input.rules) {
+    const t = String(r?.text ?? '').trim()
+    if (!t) return { error: 'Hay una regla adicional vacía: escríbela o quítala.' }
+    if (t.length > 2000) return { error: 'Cada regla puede tener máximo 2,000 caracteres.' }
+    rules.push({
+      id: String(r.id ?? '').slice(0, 40) || `r_${Date.now().toString(36)}`,
+      text: t,
+      added_at: /^\d{4}-\d{2}-\d{2}$/.test(String(r.added_at)) ? r.added_at : today,
+    })
+  }
+
+  const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', profile.tenant_id).single()
+  const current = (tenant?.settings as Record<string, unknown>) ?? {}
+  const { error } = await supabase.from('tenants')
+    .update({ settings: { ...current, contract_terms: { text, rules } } }).eq('id', profile.tenant_id)
+  if (error) return { error: error.message }
+  revalidatePath('/dashboard/configuracion')
   return { success: true }
 }

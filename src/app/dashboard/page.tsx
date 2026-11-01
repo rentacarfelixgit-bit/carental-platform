@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { rentalFolio } from '@/lib/rentalLabels'
 import EventChip from './reservas/calendario/EventChip'
 import { EVENT_PEOPLE_SELECT, eventPeople, type CalendarEventRow, type CalendarEventType } from '@/lib/calendarEvents'
+import { isOpenEnded } from '@/lib/openEnded'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -172,7 +173,7 @@ export default async function DashboardPage() {
                         {r.vehicles?.brand} {r.vehicles?.model} · {r.vehicles?.plates}
                       </p>
                     </div>
-                    <span className="text-xs text-gray-400 flex-shrink-0">hasta {r.end_date?.split('T')[0]}</span>
+                    <span className="text-xs text-gray-400 flex-shrink-0">{isOpenEnded(r.end_date) ? 'sin fecha de retorno' : `hasta ${r.end_date?.split('T')[0]}`}</span>
                   </Link>
                 </li>
               ))}
