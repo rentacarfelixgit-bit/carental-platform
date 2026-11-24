@@ -191,14 +191,19 @@ export default function ContratoButton({ reservationId, client, contract, defaul
   const finalTotal = pricingChanged || savedTotal == null ? breakdown.total : savedTotal
   const hasAdjustments = !pricingChanged && savedTotal != null && Math.abs(savedTotal - breakdown.total) >= 0.01
 
-  const printUrl = `/print/reservas/${reservationId}/contrato`
+  // Idioma en que se imprime el contrato (por ahora solo traduce la primera hoja)
+  const [printLang, setPrintLang] = useState<'es' | 'en'>('es')
+  const buildPrintUrl = (lang: string) => `/print/reservas/${reservationId}/contrato${lang === 'en' ? '?lang=en' : ''}`
+  const printUrl = buildPrintUrl(printLang)
 
   const [state, action, pending] = useActionState(
     async (prev: ContractDetailsState, fd: FormData): Promise<ContractDetailsState> => {
       const res = await saveContractDetails(prev, fd)
       if (res.success) {
-        if (printWin.current && !printWin.current.closed) printWin.current.location.href = printUrl
-        else window.open(printUrl, '_blank')
+        // El idioma viaja en el propio formulario (input hidden "print_lang")
+        const url = buildPrintUrl(String(fd.get('print_lang') ?? 'es'))
+        if (printWin.current && !printWin.current.closed) printWin.current.location.href = url
+        else window.open(url, '_blank')
         setOpen(false)
         setPricingChanged(false)
       } else {
@@ -552,6 +557,26 @@ export default function ContratoButton({ reservationId, client, contract, defaul
                       El total de la reserva cambiará de {money(savedTotal)} a {money(breakdown.total)} al generar el contrato.
                     </p>
                   )}
+                </div>
+              </section>
+
+              {/* ── Idioma del contrato ───────────────────────────────────────── */}
+              <section className="px-4 sm:px-6 pt-4">
+                <input type="hidden" name="print_lang" value={printLang} />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">¿En qué idioma imprimir el contrato?</p>
+                    <p className="text-xs text-gray-500">En inglés se imprimen la primera hoja y los términos y condiciones.</p>
+                  </div>
+                  <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5 self-start sm:self-auto" role="radiogroup" aria-label="Idioma del contrato">
+                    {([['es', 'Español'], ['en', 'English']] as const).map(([value, label]) => (
+                      <button key={value} type="button" role="radio" aria-checked={printLang === value}
+                        onClick={() => setPrintLang(value)} disabled={pending}
+                        className={`px-4 py-1.5 text-sm rounded-md transition-colors disabled:opacity-50 ${printLang === value ? 'bg-blue-600 text-white font-medium' : 'text-gray-600 hover:bg-gray-50'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </section>
 

@@ -7,7 +7,7 @@ import ReservationPricesForm from './ReservationPricesForm'
 import { getReservationPrices, getPriceCatalog, getHiddenKeys, getDeletedKeys, getDropoffLocations } from '@/lib/reservationPrices'
 import DropoffLocationsForm from './DropoffLocationsForm'
 import TermsForm from './TermsForm'
-import { getContractTerms } from '@/lib/contractTerms'
+import { getContractTermsBi } from '@/lib/contractTerms'
 import ConfigTabs, { type ConfigTabId } from './ConfigTabs'
 import CurrencyForm from './CurrencyForm'
 import { getCurrencySettings } from '@/lib/currency'
@@ -106,7 +106,7 @@ export default async function ConfiguracionPage({ searchParams }: Props) {
             label: 'Términos y condiciones',
             description: 'Se imprimen en una hoja con cada contrato, junto con las reglas adicionales que agregues.',
             icon: 'M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z',
-            content: <TermsForm terms={getContractTerms(tenant?.settings)} canEdit={isAdmin} />,
+            content: <TermsForm terms={getContractTermsBi(tenant?.settings)} canEdit={isAdmin} />,
           },
         ]}
       />

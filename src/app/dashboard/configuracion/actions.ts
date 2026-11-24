@@ -264,7 +264,8 @@ export async function saveDropoffLocations(locations: { code: string; label: str
 // ── Términos y condiciones del contrato + reglas adicionales ────────────────
 export async function saveContractTerms(input: {
   text: string
-  rules: { id: string; text: string; added_at: string }[]
+  text_en: string
+  rules: { id: string; text: string; text_en: string; added_at: string }[]
 }): Promise<{ success?: boolean; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -274,17 +275,21 @@ export async function saveContractTerms(input: {
   if (!profile || (profile.role !== 'admin' && profile.role !== 'superadmin')) return { error: 'Sin permisos' }
 
   const text = String(input.text ?? '').trim()
-  if (text.length > 30000) return { error: 'El texto es demasiado largo (máx. 30,000 caracteres).' }
+  const text_en = String(input.text_en ?? '').trim()
+  if (text.length > 30000) return { error: 'El texto en español es demasiado largo (máx. 30,000 caracteres).' }
+  if (text_en.length > 30000) return { error: 'El texto en inglés es demasiado largo (máx. 30,000 caracteres).' }
   if (!Array.isArray(input.rules) || input.rules.length > 50) return { error: 'Máximo 50 reglas adicionales.' }
   const today = new Date().toISOString().slice(0, 10)
   const rules = []
   for (const r of input.rules) {
     const t = String(r?.text ?? '').trim()
-    if (!t) return { error: 'Hay una regla adicional vacía: escríbela o quítala.' }
-    if (t.length > 2000) return { error: 'Cada regla puede tener máximo 2,000 caracteres.' }
+    const tEn = String(r?.text_en ?? '').trim()
+    if (!t && !tEn) return { error: 'Hay una regla adicional vacía: escríbela o quítala.' }
+    if (t.length > 2000 || tEn.length > 2000) return { error: 'Cada regla puede tener máximo 2,000 caracteres por idioma.' }
     rules.push({
       id: String(r.id ?? '').slice(0, 40) || `r_${Date.now().toString(36)}`,
       text: t,
+      text_en: tEn,
       added_at: /^\d{4}-\d{2}-\d{2}$/.test(String(r.added_at)) ? r.added_at : today,
     })
   }
@@ -292,7 +297,7 @@ export async function saveContractTerms(input: {
   const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', profile.tenant_id).single()
   const current = (tenant?.settings as Record<string, unknown>) ?? {}
   const { error } = await supabase.from('tenants')
-    .update({ settings: { ...current, contract_terms: { text, rules } } }).eq('id', profile.tenant_id)
+    .update({ settings: { ...current, contract_terms: { text, text_en, rules } } }).eq('id', profile.tenant_id)
   if (error) return { error: error.message }
   revalidatePath('/dashboard/configuracion')
   return { success: true }

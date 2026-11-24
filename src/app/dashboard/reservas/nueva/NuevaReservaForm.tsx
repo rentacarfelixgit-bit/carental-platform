@@ -700,20 +700,6 @@ export default function NuevaReservaForm({
                     </div>
                   </div>
                 </div>
-                {rentalSubtotal > 0 && (
-                  <div className="grid grid-cols-2 gap-3 pt-1 border-t border-gray-100">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Subtotal Renta</label>
-                      <div className={roInputCls}>{fmtUSD(rentalSubtotal)}</div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Total General</label>
-                      <div className={`${roInputCls} font-bold text-blue-700`}>
-                        {fmtUSD(grandTotal)}
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
 

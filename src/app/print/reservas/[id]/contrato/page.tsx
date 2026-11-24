@@ -3,9 +3,10 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { rentalFolio } from '@/lib/rentalLabels'
-import { BREAKDOWN_SELECT, resolveBreakdown, CARD_INSURANCES, CARD_INSURANCE_KEEPS } from '@/lib/reservationPrices'
+import { BREAKDOWN_SELECT, resolveBreakdown, CARD_INSURANCES } from '@/lib/reservationPrices'
 import { getContractTerms } from '@/lib/contractTerms'
-import { WaiverLetter, CardInsuranceDoc, TermsPage } from './ExtraPages'
+import { WaiverLetter, CardDeclineLetter, TermsPage } from './ExtraPages'
+import { CONTRACT_I18N, parseContractLang, type ContractTexts } from './i18n'
 import { fmtUSD, fmtLocal, fmtRate, fmtPayment, toLocal, paymentToUSD, rentalRate, getCurrencySettings } from '@/lib/currency'
 import { EQUIPMENT_CONDITION, EQUIPMENT_TYPES, type EquipmentCondition, type EquipmentType } from '@/lib/equipment'
 import { SWAP_REASONS, type SwapReason } from '@/lib/vehicleSwap'
@@ -29,37 +30,6 @@ function fmtDate(d: string) {
   return new Date(d).toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
-// ─── Imágenes del vehículo desde /public ──────────────────────────────────
-const imgStyle: React.CSSProperties = { width: '100%', height: 'auto', maxHeight: 130, objectFit: 'contain', display: 'block' }
-const imgStyleTop: React.CSSProperties = { width: '100%', height: 'auto', maxHeight: 160, objectFit: 'contain', display: 'block' }
-
-// ─── Gauge de combustible ──────────────────────────────────────────────────
-function FuelGauge({ level, small }: { level?: string; small?: boolean }) {
-  const map: Record<string, number> = { empty:0, quarter:2, half:4, three_quarters:6, full:8 }
-  const selected = level ? (map[level] ?? -1) : -1
-  const slots = ['E','1/8','2/8','3/8','4/8','5/8','6/8','7/8','F']
-  const fs = small ? 7 : 8
-  const bw = small ? 20 : 24
-  const bh = small ? 14 : 16
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
-      {slots.map((s, i) => (
-        <div key={i} style={{
-          width: bw, height: bh,
-          border: '1px solid #000',
-          borderLeft: i === 0 ? '1px solid #000' : 'none',
-          // Casilla del nivel registrado en la inspección: rellena en negro
-          background: i === selected ? '#000' : '#fff',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: fs, fontWeight: i === selected ? 700 : 400,
-          color: i === selected ? '#fff' : '#000',
-          WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact',
-        }}>{s}</div>
-      ))}
-    </div>
-  )
-}
-
 // ─── Campo de formulario ───────────────────────────────────────────────────
 function Field({ label, value, style }: { label: string; value?: string | number | null; style?: React.CSSProperties }) {
   return (
@@ -73,19 +43,19 @@ function Field({ label, value, style }: { label: string; value?: string | number
 }
 
 // ─── Fila de seguro ────────────────────────────────────────────────────────
-function InsuranceRow({ label, price, status }: { label: string; price?: string; status?: 'a' | 'd' | '' }) {
+function InsuranceRow({ label, price, status, L }: { label: string; price?: string; status?: 'a' | 'd' | ''; L: ContractTexts }) {
   const check = '✓'
   return (
     <tr>
       <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '45%' }}>{label}</td>
       <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%' }}>
-        PRECIO: {price ?? ''}
+        {L.price} {price ?? ''}
       </td>
       <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '18%', fontWeight: status === 'a' ? 700 : 400 }}>
-        ACEPTAR: {status === 'a' ? check : ''}
+        {L.accept} {status === 'a' ? check : ''}
       </td>
       <td style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc', width: '19%', fontWeight: status === 'd' ? 700 : 400 }}>
-        DECLINAR: {status === 'd' ? check : ''}
+        {L.decline} {status === 'd' ? check : ''}
       </td>
     </tr>
   )
@@ -100,6 +70,9 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
     const s = typeof v === 'string' ? v : ''
     return s.slice(0, max)
   }
+  // Idioma de la primera hoja (elegido en "Preparar contrato")
+  const lang = parseContractLang(sp.lang)
+  const L = CONTRACT_I18N[lang]
   // Datos del modal que llegan por URL
   const spFolio        = p('folio',        50)
   const spAprobacion   = p('aprobacion',   50)
@@ -209,11 +182,6 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
     .eq('reservation_id', id).eq('type', 'checkout').is('swap_id', null)
     .order('created_at', { ascending: false }).limit(1).maybeSingle()
 
-  const { data: checkin } = await supabase
-    .from('inspections').select('odometer, fuel_level, notes')
-    .eq('reservation_id', id).eq('type', 'checkin').is('swap_id', null)
-    .order('created_at', { ascending: false }).limit(1).maybeSingle()
-
   const nights = Math.ceil(
     (new Date(effectiveEnd(reservation.start_date, reservation.end_date)).getTime() - new Date(reservation.start_date).getTime()) / 86400000
   )
@@ -265,11 +233,11 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   const contratoNum = reservation.number ? rentalFolio(reservation.origin, reservation.number) : id.slice(0, 8).toUpperCase()
   const companyName = tenant?.name ?? 'Savings Car Rental'
   const s = (tenant?.settings as Record<string, unknown>) ?? {}
-  const bizAddress = s.address ? `DIRECCIÓN: ${String(s.address).toUpperCase()}.` : 'DIRECCIÓN: AVENIDA VICTOR MANUEL ESPAILLAT UVERAL, LICEY AL MEDIO.'
+  const bizAddress = s.address ? `${L.bizAddress}: ${String(s.address).toUpperCase()}.` : `${L.bizAddress}: AVENIDA VICTOR MANUEL ESPAILLAT UVERAL, LICEY AL MEDIO.`
   const bizCity    = s.city    ? String(s.city).toUpperCase() + '.' : 'AEROPUERTO INTERNACIONAL DEL CIBAO.'
   const bizEmail   = s.email   ? `EMAIL: ${String(s.email).toUpperCase()}` : 'EMAIL: FELIXCASTILLOCARRENTAL@GMAIL.COM'
   const bizEmail2  = s.email_2 ? `EMAIL: ${String(s.email_2).toUpperCase()}` : 'EMAIL: RESERVACIONRENTCAR@GMAIL.COM'
-  const bizPhone   = s.phone   ? `TELÉFONO: ${String(s.phone)}.` : 'TELÉFONO: 829-864-3074.'
+  const bizPhone   = s.phone   ? `${L.bizPhone}: ${String(s.phone)}.` : `${L.bizPhone}: 829-864-3074.`
   const bizRnc     = s.rnc     ? `RNC: ${String(s.rnc)}.` : 'RNC: 131754092.'
 
   // ── Precios: exactamente los de la reserva (mismo cálculo que Nueva reserva y "Preparar contrato") ──
@@ -299,7 +267,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
   }
   const insPrice = (key: string) => {
     const l = bLine(key)
-    return l && l.price > 0 ? `${fmtMoney(l.price)}${l.kind === 'per_day' ? '/DÍA' : ''}` : ''
+    return l && l.price > 0 ? `${fmtMoney(l.price)}${l.kind === 'per_day' ? L.perDay : ''}` : ''
   }
 
   // Datos del contrato: lo guardado en la reserva (los parámetros de URL antiguos solo como respaldo)
@@ -327,8 +295,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
     todayText:   new Date().toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' }),
   }
   const declinedNames = insLines.filter(l => !l.checked).map(l => l.label)
-  const cardKeeps = insLines.filter(l => CARD_INSURANCE_KEEPS.includes(l.key)).map(l => l.label)
-  const contractTerms = getContractTerms(tenant?.settings)
+  const contractTerms = getContractTerms(tenant?.settings, lang)
   const ctDeduct = deductBas || (reservation.insurance_deductible != null ? fmtMoney(Number(reservation.insurance_deductible)) : '')
 
   const extraDriver = extras.find(e => e.extra_type === 'extra_driver')
@@ -345,12 +312,31 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
         .screen-bar h2 { font-size: 14px; font-weight: 600; }
         .pages { padding: 16px; display: flex; flex-direction: column; gap: 16px; align-items: center; }
         .page { width: 215.9mm; background: #fff; padding: 8mm 9mm; box-shadow: 0 2px 10px rgba(0,0,0,.2); }
+        .page-full { padding: 0; }
+        .page-full img { display: block; width: 100%; height: auto; margin: 0 auto; object-fit: contain; }
+        /* Impresión: sin encabezado ni pie del navegador (fecha, título, URL).
+           Al definir cajas de margen en @page, Chrome/Edge omiten sus encabezados
+           y pies por defecto; solo dejamos la numeración de páginas. */
+        @page {
+          size: letter;
+          margin: 10mm;
+          @top-left { content: none; }
+          /* Chrome decide por lado: si arriba no hay ninguna caja con contenido,
+             vuelve a poner su encabezado. Un espacio invisible lo evita. */
+          @top-center { content: "\\00a0"; }
+          @top-right { content: none; }
+          @bottom-left { content: none; }
+          @bottom-center { content: none; }
+          @bottom-right { content: counter(page) "/" counter(pages); font-family: Arial, Helvetica, sans-serif; font-size: 8pt; color: #000; }
+        }
         @media print {
           body { background: #fff; }
           .screen-bar { display: none !important; }
           .pages { padding: 0; gap: 0; }
           .page { box-shadow: none; width: 100%; padding: 6mm 8mm; page-break-after: always; }
           .page:last-child { page-break-after: auto; }
+          .page-full { padding: 0; }
+          .page-full img { max-height: 255mm; }
         }
         /* Helpers */
         .co-title { font-size: 18px; font-weight: 900; text-align: center; letter-spacing: 0.5px; text-transform: uppercase; }
@@ -385,7 +371,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
           {/* Cabecera superior */}
           <div style={{ textAlign: 'right', fontSize: 7.5, marginBottom: 2 }}>
-            CONTRATO DE ALQUILER PARTE FRONTAL, ALQUILER MÁXIMO 30 DÍAS.
+            {L.headerTop}
           </div>
 
           {/* Layout dos columnas */}
@@ -398,7 +384,9 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
                   {/* Logo / empresa */}
                   <div style={{ marginBottom: 6 }}>
-                    <div className="co-title">{companyName}</div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src="/logos/Felix_Castillo_CR_Logo-2.png" alt={companyName}
+                      style={{ display: 'block', height: 46, width: 'auto', maxWidth: '100%' }} />
                     <div style={{ fontSize: 7.5, lineHeight: 1.5, marginTop: 3, color: '#333' }}>
                       <div>{bizAddress}</div>
                       <div>{bizCity}</div>
@@ -411,41 +399,41 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
                   {/* Datos del cliente */}
                   <div className="gap-2">
-                    <Field label="NOMBRE" value={client?.full_name} />
-                    <Field label="DIRECCIÓN" value={clientAddress} />
+                    <Field label={L.name} value={client?.full_name} />
+                    <Field label={L.address} value={clientAddress} />
                     <div className="grid3">
-                      <Field label="CIUDAD" value={clientCity} />
-                      <Field label="ESTADO" value={clientState} />
-                      <Field label="ZIP CODE" value={clientZip} />
+                      <Field label={L.city} value={clientCity} />
+                      <Field label={L.state} value={clientState} />
+                      <Field label={L.zip} value={clientZip} />
                     </div>
                     <div className="grid2">
-                      <Field label="LICENCIA" value={clientLicense} />
-                      <Field label="PASAPORTE" value={clientPassport} />
+                      <Field label={L.license} value={clientLicense} />
+                      <Field label={L.passport} value={clientPassport} />
                     </div>
                     <div className="grid2">
-                      <Field label="NUM. DE CONTACTO" value={client?.phone} />
-                      <Field label="NUM. DE CONTACTO LOCAL" value={clientLocalPhone} />
+                      <Field label={L.contactNum} value={client?.phone} />
+                      <Field label={L.localContactNum} value={clientLocalPhone} />
                     </div>
 
                     {/* Conductor adicional 1 */}
-                    <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>CONDUCTOR ADICIONAL:</div>
+                    <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>{L.additionalDriver}</div>
                     <div className="grid2">
-                      <Field label="LICENCIA" value={ctD1Lic} />
-                      <Field label="NUM. DE CONTACTO" value={ctD1Tel} />
+                      <Field label={L.license} value={ctD1Lic} />
+                      <Field label={L.contactNum} value={ctD1Tel} />
                     </div>
 
                     {/* Conductor adicional 2 */}
-                    <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>CONDUCTOR ADICIONAL:</div>
+                    <div style={{ fontSize: 8, fontWeight: 700, marginTop: 2 }}>{L.additionalDriver}</div>
                     <div className="grid2">
-                      <Field label="LICENCIA" value={ctD2Lic} />
-                      <Field label="NUM. DE CONTACTO" value={ctD2Tel} />
+                      <Field label={L.license} value={ctD2Lic} />
+                      <Field label={L.contactNum} value={ctD2Tel} />
                     </div>
 
-                    <Field label="DIRECCIÓN LOCAL" value={clientLocalAddress} />
+                    <Field label={L.localAddress} value={clientLocalAddress} />
 
                     {/* Observaciones */}
                     <div>
-                      <span style={{ fontSize: 7.5, fontWeight: 700 }}>OBSERVACIONES / DETALLE:</span>
+                      <span style={{ fontSize: 7.5, fontWeight: 700 }}>{L.remarks}</span>
                       <div style={{ border: '0.7px solid #000', minHeight: 16, marginTop: 2, padding: '2px 3px', fontSize: 8 }}>
                         {reservation.notes ?? ''}
                       </div>
@@ -456,24 +444,30 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
                     {/* Declaración */}
                     <div className="note-block" style={{ marginTop: 4 }}>
-                      LOS DATOS SUMINISTRADOS POR EL ARRENDATARIO SON VERÍDICOS Y ENTREGADOS DE MANERA VOLUNTARIA:
+                      {L.declaration}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, marginTop: 4 }}>
                       <span style={{ fontSize: 9, fontWeight: 700 }}>X</span>
                       <div style={{ flex: 1, borderBottom: '0.7px solid #000', minHeight: 18 }} />
                     </div>
                     <div className="note-block" style={{ marginTop: 3 }}>
-                      HE LEÍDO LOS TÉRMINOS Y CONDICIONES DE ESTE CONTRATO, DICHO ESTO,
-                      PROCEDO A FIRMAR CONFORME Y VOLUNTARIAMENTE LO ESTABLECIDO EN EL MISMO.
+                      {L.readTerms}
                     </div>
                   </div>
 
                   {/* Notas al pie */}
                   <div className="note-block" style={{ marginTop: 8, borderTop: '0.7px solid #ccc', paddingTop: 4 }}>
-                    1. EL ARRENDATARIO ES RESPONSABLE POR MULTAS DE TRÁFICO.<br/>
-                    2. EL MÍNIMO DE RENTA ES DE UN DÍA.<br/>
-                    3. EL ARRENDATARIO DEBE PRESENTARSE AL FINALIZAR EL PERÍODO DE RENTA ACORDADO
-                    TANTO PARA RETORNAR LA UNIDAD O PARA EXTENDER EL CONTRATO.
+                    {L.note1}<br/>
+                    {L.note2}<br/>
+                    {L.note3}
+                  </div>
+
+                  {/* Avisos (movidos desde la columna derecha) */}
+                  <div className="note-block" style={{ border: '0.7px solid #000', padding: '3px 4px', fontSize: 6.5, fontWeight: 700, marginTop: 8 }}>
+                    {L.mileageBox}
+                  </div>
+                  <div className="note-block" style={{ border: '0.7px solid #000', padding: '3px 4px', fontSize: 6.5, fontWeight: 700, marginTop: 6 }}>
+                    {L.daysBox}
                   </div>
 
                 </td>
@@ -486,29 +480,29 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                     <tbody>
                       <tr>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
-                          <div style={{ fontSize: 7, fontWeight: 700 }}>FOLIO DEL DEPST.</div>
+                          <div style={{ fontSize: 7, fontWeight: 700 }}>{L.depositFolio}</div>
                           <div style={{ minHeight: 12, fontSize: 9 }}>{ctFolio}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
-                          <div style={{ fontSize: 7, fontWeight: 700 }}>NUM. DE APROB.</div>
+                          <div style={{ fontSize: 7, fontWeight: 700 }}>{L.approvalNum}</div>
                           <div style={{ minHeight: 12, fontSize: 9 }}>{ctAprobacion}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
-                          <div style={{ fontSize: 7, fontWeight: 700 }}>PREPARADO POR:</div>
+                          <div style={{ fontSize: 7, fontWeight: 700 }}>{L.preparedBy}</div>
                           <div style={{ minHeight: 12, fontSize: 9 }}>{ctPreparado}</div>
                         </td>
                         <td style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, width: '25%' }}>
-                          <div style={{ fontSize: 7, fontWeight: 700 }}>FORMA DE PAGO:</div>
+                          <div style={{ fontSize: 7, fontWeight: 700 }}>{L.paymentMethod}</div>
                           <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
                             <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}>
                               <span className="box" style={{ width:8, height:8, background: payCash ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
                                 {payCash ? '✓' : ''}
-                              </span> EFECTIVO
+                              </span> {L.cash}
                             </span>
                             <span style={{ fontSize: 7, display:'flex', gap:2, alignItems:'center' }}>
                               <span className="box" style={{ width:8, height:8, background: payCard ? '#000' : '#fff', display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
                                 {payCard ? '✓' : ''}
-                              </span> TARJETA
+                              </span> {L.card}
                             </span>
                           </div>
                         </td>
@@ -518,56 +512,50 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
                   <div className="gap-2">
                     <div className="grid2">
-                      <Field label="ESTACIÓN / OFICINA" value="" />
-                      <Field label="NUM. DE CONTRATO" value={contratoNum} />
+                      <Field label={L.station} value="" />
+                      <Field label={L.contractNum} value={contratoNum} />
                     </div>
                     <div className="grid2">
-                      <Field label="MARCAR DEL VEHÍCULO" value={vehicle ? `${vehicle.brand}` : ''} />
-                      <div className="note-block" style={{ border: '0.7px solid #000', padding: '2px 3px', fontSize: 6.5, fontWeight: 700, alignSelf: 'stretch', display: 'flex', alignItems: 'center' }}>
-                        LOS VEHICULOS TIENEN KILOMETRAJE ILIMITADO PERO SOLO PUEDEN SER TRANSITADOS EN TERRITORIO DE LA REPUBLICA DOMINICANA.
-                      </div>
+                      <Field label={L.vehicleMake} value={vehicle ? `${vehicle.brand}` : ''} />
+                      <Field label={L.openingDate} value={fmtDate(reservation.start_date)} />
                     </div>
-                    <Field label="FECHA DE APERTURA DEL CONTRATO" value={fmtDate(reservation.start_date)} />
                     <div className="grid3">
                       <div style={{ gridColumn: 'span 1' }}>
-                        <Field label="MODELO DEL VEHÍCULO" value={vehicle?.model} />
+                        <Field label={L.vehicleModel} value={vehicle?.model} />
                       </div>
-                      <Field label="PRECIO POR DÍA" value={fmtAmt(bd.daily_rate)} />
-                      <Field label="CANTIDAD DE DÍAS" value={pricing.days || nights} />
+                      <Field label={L.dailyRate} value={fmtAmt(bd.daily_rate)} />
+                      <Field label={L.numDays} value={pricing.days || nights} />
                     </div>
                     <div className="grid2">
-                      <Field label="PLACA DEL VEHÍCULO" value={vehicle?.plates} />
-                      <div className="note-block" style={{ border: '0.7px solid #000', padding: '2px 3px', fontSize: 6.5, fontWeight: 700, alignSelf: 'stretch', display: 'flex', alignItems: 'center' }}>
-                        LA CANTIDAD DE DIAS ES CALCULADA EN FORMATO DE 24 HORAS PARTIENDO DE LA HORA EN LA QUE EL ARRENDATARIO RECIBE EL VEHICULO. EL DIA DE RETORNO DEBE SER A LA MISMA HORA. PASADAS LAS 4 HORAS SE PROCEDERA A CARGAR 1 DIA EXTRA.
-                      </div>
+                      <Field label={L.plate} value={vehicle?.plates} />
+                      <Field label={L.color} value={vehicle?.color} />
                     </div>
-                    <Field label="COLOR DEL VEHÍCULO" value={vehicle?.color} />
-                    <Field label="KM DE SALIDA DEL VEHÍCULO" value={checkout?.odometer} />
-                    <Field label="FECHA SALIDA DEL VEHÍCULO" value={fmt(reservation.start_date)} />
-                    <Field label="FECHA ENTRADA DEL VEHÍCULO" value={isOpenEnded(reservation.end_date) ? 'SIN FECHA DE RETORNO (ABIERTO)' : fmt(reservation.end_date)} />
+                    <Field label={L.kmOut} value={checkout?.odometer} />
+                    <Field label={L.dateOut} value={fmt(reservation.start_date)} />
+                    <Field label={L.dateIn} value={isOpenEnded(reservation.end_date) ? L.openEnded : fmt(reservation.end_date)} />
                     <div className="grid2">
-                      <Field label="VEHÍCULO RETORNA EN LAS MISMAS CONDICIONES" value="" />
-                      <Field label="EDAD DEL CONDUCTOR" value={ctEdad} />
+                      <Field label={L.sameCondition} value="" />
+                      <Field label={L.driverAge} value={ctEdad} />
                     </div>
                     <div className="grid2">
-                      <Field label="REEMPLAZO DE VEHÍCULO MARCAR" value="" />
-                      <Field label="REEMPLAZO DE VEHÍCULO MODELO" value="" />
+                      <Field label={L.replMake} value="" />
+                      <Field label={L.replModel} value="" />
                     </div>
                     <div className="grid2">
-                      <Field label="REEMPLAZO DE VEHÍCULO PLACA" value="" />
-                      <Field label="REEMPLAZO DE VEHÍCULO COLOR" value="" />
+                      <Field label={L.replPlate} value="" />
+                      <Field label={L.replColor} value="" />
                     </div>
                     <div className="grid2">
-                      <Field label="KM DE SALIDA (REEMPLAZO)" value="" />
-                      <Field label="FECHA SALIDA (REEMPLAZO)" value="" />
+                      <Field label={L.replKmOut} value="" />
+                      <Field label={L.replDateOut} value="" />
                     </div>
                     <div className="grid2">
-                      <Field label="FECHA ENTRADA (REEMPLAZO)" value="" />
+                      <Field label={L.replDateIn} value="" />
                       <div style={{ fontSize: 7.5, display:'flex', alignItems:'center', gap:4 }}>
                         <span className="box" style={{ background: ctPets ? '#000' : '#fff', display:'inline-flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:6, fontWeight:900 }}>
                           {ctPets ? '✓' : ''}
                         </span>
-                        <span>CLIENTE TIENE MASCOTAS / PETS:</span>
+                        <span>{L.pets}</span>
                       </div>
                     </div>
 
@@ -576,13 +564,13 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                       <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000' }}>
                         <tbody>
                           {insLines.map(it => (
-                            <InsuranceRow key={it.key} label={`${it.label.toUpperCase()}:`} price={insPrice(it.key)} status={insDecision(it.key)} />
+                            <InsuranceRow key={it.key} L={L} label={`${it.label.toUpperCase()}:`} price={insPrice(it.key)} status={insDecision(it.key)} />
                           ))}
                           <tr>
                             <td colSpan={4} style={{ fontSize: 8, padding: '1px 3px', borderBottom: '0.5px solid #ccc' }}>
-                              DEDUCIBLE DEL SEGURO: {ctDeduct}
-                              {bd.waive_all && <b> · EL CLIENTE DECLINÓ TODOS LOS SEGUROS (VER CARTA ANEXA)</b>}
-                              {cardIns && <b> · SEGURO DE TARJETA: {CARD_INSURANCES[cardIns].toUpperCase()} (VER DOCUMENTO ANEXO)</b>}
+                              {L.deductible} {ctDeduct}
+                              {bd.waive_all && <b> · {L.declinedAll}</b>}
+                              {cardIns && <b> · {L.cardInsurance(CARD_INSURANCES[cardIns].toUpperCase())}</b>}
                             </td>
                           </tr>
                         </tbody>
@@ -595,12 +583,13 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                         {/* Extras de la reserva (mismos conceptos que Nueva reserva) */}
                         {[
                           ...bd.lines.filter(l => l.group === 'dropoff').map(l => [`DROP OFF: ${l.label.toUpperCase()}`, fmtAmt(l.amount)]),
-                          ...extraLines.map(it => [`ADICIONALES: ${it.label.toUpperCase()}${it.checked && it.kind === 'per_day' ? ` (${bd.days} DÍA${bd.days !== 1 ? 'S' : ''} × ${fmtMoney(it.price)})` : ''}`, fmtAmt(it.amount)]),
-                          ...(bLine('otros')?.checked ? [[`ADICIONALES: ${(bLine('otros')!.label).toUpperCase()}`, fmtAmt(bLine('otros')!.amount)]] : []),
+                          ...extraLines.map(it => [`${L.addOns}: ${it.label.toUpperCase()}${it.checked && it.kind === 'per_day' ? ` (${L.days(bd.days)} × ${fmtMoney(it.price)})` : ''}`, fmtAmt(it.amount)]),
+                          ...(bLine('otros')?.checked ? [[`${L.addOns}: ${(bLine('otros')!.label).toUpperCase()}`, fmtAmt(bLine('otros')!.amount)]] : []),
                           ['ADICIONALES: UPGRADE DE VEHÍCULO', ''],
                           ['CARGOS: LIMPIEZA PROFUNDA DEL VEHÍCULO', ''],
                           ['CARGOS: DETALLE Y MISCELÁNEOS', ''],
-                        ].map(([item, val], i) => (
+                        ].filter(([, val]) => val !== '') /* solo lo seleccionado / con monto */
+                        .map(([item, val], i) => (
                           <tr key={i}>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>{item}</td>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}>{val}</td>
@@ -609,42 +598,45 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                         {extras.filter(e => !['extra_driver'].includes(e.extra_type)).map(e => (
                           <tr key={e.id}>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>
-                              {e.extra_type === 'gps' ? 'GPS' : e.extra_type === 'baby_seat' ? 'SILLA DE BEBÉ' : e.description ?? e.extra_type}
+                              {e.extra_type === 'gps' ? 'GPS' : e.extra_type === 'baby_seat' ? L.babySeat : e.description ?? e.extra_type}
                             </td>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}/>
                           </tr>
                         ))}
                         {([
-                          [`TASA DE CAMBIO: USD - ${cur.localCode}`, fxRate > 0 ? fmtRate(fxRate, cur.localSymbol) : ''],
+                          [`${L.exchangeRate}: USD - ${cur.localCode}`, fxRate > 0 ? fmtRate(fxRate, cur.localSymbol) : ''],
                           ['DEPÓSITO', ''],
-                          [`RENTA (${bd.days} DÍA${bd.days !== 1 ? 'S' : ''} × ${fmtMoney(bd.daily_rate)})`, fmtAmt(bd.rental_subtotal)],
-                          ['SEGUROS', fmtAmt(bd.insurance_total)],
-                          ['ADICIONALES', fmtAmt(bd.extras_total)],
-                          ['SUB-TOTAL', fmtAmt(bd.subtotal)],
+                          [`${L.rental} (${L.days(bd.days)} × ${fmtMoney(bd.daily_rate)})`, fmtAmt(bd.rental_subtotal)],
+                          [L.insurance, fmtAmt(bd.insurance_total)],
+                          [L.addOns, fmtAmt(bd.extras_total)],
+                          [L.subtotal, fmtAmt(bd.subtotal)],
                           ...taxLines.map(it => {
                             const l = bLine(it.key)
                             const rate = l?.checked ? (it.kind === 'pct' ? ` (${l.price}%)` : '') : ' (   )'
-                            return [`IMPUESTOS: ${it.label.toUpperCase()}${rate}`, l?.checked ? fmtMoney(l.amount) : '']
+                            return [`${L.taxes}: ${it.label.toUpperCase()}${rate}`, l?.checked ? fmtMoney(l.amount) : '']
                           }),
-                          ...(pricing.adjustment ? [['AJUSTES (CAMBIO DE FECHA / VEHÍCULO)', fmtMoney(pricing.adjustment)]] : []),
+                          ...(pricing.adjustment ? [[L.adjustments, fmtMoney(pricing.adjustment)]] : []),
                           ['DESCUENTOS', ''],
-                          ...(cashPaid > 0 ? [['ABONO EN EFECTIVO', fmtPayment(cashPaid, reservation.cash_payment_currency, cur)]] : []),
-                          ...(cardPaid > 0 ? [['ABONO CON TARJETA', fmtPayment(cardPaid, reservation.card_payment_currency, cur)]] : []),
-                          ...(cashPaid + cardPaid > 0 ? [['BALANCE PENDIENTE', `${fmtMoney(balance)}${fxRate > 0 ? ` (${fmtLocal(toLocal(balance, fxRate), cur.localSymbol)})` : ''}`]] : []),
-                        ] as [string, string][]).map(([label, val], i) => (
+                          ...(cashPaid > 0 ? [[L.cashPayment, fmtPayment(cashPaid, reservation.cash_payment_currency, cur)]] : []),
+                          ...(cardPaid > 0 ? [[L.cardPayment, fmtPayment(cardPaid, reservation.card_payment_currency, cur)]] : []),
+                          ...(cashPaid + cardPaid > 0 ? [[L.balanceDue, `${fmtMoney(balance)}${fxRate > 0 ? ` (${fmtLocal(toLocal(balance, fxRate), cur.localSymbol)})` : ''}`]] : []),
+                        ] as [string, string][]).filter(([, val]) => val !== '') /* solo lo seleccionado / con monto */
+                        .map(([label, val], i) => (
                           <tr key={`t${i}`}>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', width: '65%' }}>{label}</td>
                             <td style={{ fontSize: 7.5, padding: '1px 3px', borderBottom: '0.5px solid #ccc', borderLeft: '0.5px solid #ccc' }}>{val}</td>
                           </tr>
                         ))}
                         <tr>
-                          <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN DÓLARES (USD):</td>
+                          <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>{L.totalUsd}</td>
                           <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmtMoney(pricing.total)}</td>
                         </tr>
-                        <tr>
-                          <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>TOTAL EN {cur.localName.toUpperCase()} ({cur.localCode}):</td>
-                          <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{totalLocal != null ? fmtLocal(totalLocal, cur.localSymbol) : ''}</td>
-                        </tr>
+                        {totalLocal != null && (
+                          <tr>
+                            <td style={{ fontSize: 8, padding: '2px 3px', fontWeight: 700 }}>{L.totalLocal(cur.localName, cur.localCode)}</td>
+                            <td style={{ fontSize: 8, padding: '2px 3px', borderLeft: '0.5px solid #ccc', fontWeight: 700 }}>{fmtLocal(totalLocal, cur.localSymbol)}</td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
 
@@ -653,31 +645,31 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
                       <tbody>
                         <tr>
                           <td colSpan={2} style={{ fontSize: 7, padding: '2px 3px', borderBottom: '0.5px solid #000', textAlign: 'center', fontWeight: 700 }}>
-                            EL ARRENDATERO ESTA EN EL DERECHO DE DECLINAR TODOS LOS SEGUROS PERO SE HARA RESPONSABLE EN SU TOTALIDAD A CUALQUIER DAÑO O SITUACION QUE PRESENTE EL VEHICULO DURANTE EL PERIODO DE RENTA.
+                            {L.clauseDecline}
                           </td>
                         </tr>
                         <tr>
                           <td style={{ fontSize: 7, padding: '2px 3px', borderBottom: '0.5px solid #000', borderRight: '0.5px solid #000', width: '70%' }}>
-                            EL ARRENDATARIO PARA OPTAR AL DERECHO DE DECLINAR TODOS LOS SEGUROS DEBE DE TENER UNA TARJETA DE DEBITO O CREDITO CON UNA CANTIDAD DE DINERO DISPONIBLE PARA HACER UN DEPOSITO.
+                            {L.clauseCard}
                           </td>
                           <td style={{ fontSize: 7.5, padding: '2px 3px', borderBottom: '0.5px solid #000', fontWeight: 700, verticalAlign: 'top' }}>
-                            DEPOSITO:
+                            {L.deposit}
                           </td>
                         </tr>
                         <tr>
                           <td style={{ fontSize: 7, padding: '2px 3px', borderRight: '0.5px solid #000', borderBottom: '0.5px solid #000', width: '50%', textAlign: 'center', fontWeight: 700 }}>
-                            EL CONDUCTOR Y CONOC. ADICN. DEBEN TENER 25 AÑOS DE EDAD PARA CONDUCIR EL VEHICULO, DE SER MENOR DE 25 AÑOS DEBERA PAGAR UN CARGO EXTRA.
+                            {L.clauseAge}
                           </td>
                           <td style={{ fontSize: 7, padding: '2px 3px', borderBottom: '0.5px solid #000', textAlign: 'center', fontWeight: 700 }}>
-                            LAS MASCOTAS ESTAN PERMITIDAS DENTRO DEL VEHICULO PERO MANTENER LA LIMPIEZA DEL VEHICULO ES TOTAL RESPONSABILIDAD DEL ARRENDATARIO.
+                            {L.clausePets}
                           </td>
                         </tr>
                         <tr>
                           <td style={{ fontSize: 7, padding: '2px 3px', borderRight: '0.5px solid #000', textAlign: 'center', fontWeight: 700 }}>
-                            ESTA PROHIBIDO FUMAR DENTRO DEL VEHICULO. DE NO RESPETAR ESTA NORMA SE INCURRIRA EN CARGOS ADICIONALES.
+                            {L.clauseSmoking}
                           </td>
                           <td style={{ fontSize: 7, padding: '2px 3px', textAlign: 'center', fontWeight: 700 }}>
-                            EL ARRENDATARIO DEBE RETORNAR EL VEHICULO EN EL MISMO ESTADO EN QUE LO RECIBIO: MISMA CANTIDAD DE COMBUSTIBLE, MISMO NIVEL DE LIMPIEZA E HIGIENE.
+                            {L.clauseReturn}
                           </td>
                         </tr>
                       </tbody>
@@ -693,222 +685,20 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
 
 
         {/* ═══════════════════════════════════════════════════
-            PÁGINA 2 — CONDICIÓN DEL VEHÍCULO
+            PÁGINA 2 — CONTRATO PARTE ATRÁS (documento oficial)
+            Imagen generada de public/docs/Contrato Parte Atras.pdf
+            (la hoja de condición del vehículo ya no se imprime con el contrato)
         ═══════════════════════════════════════════════════ */}
-        <div className="page">
-
-          {/* Encabezado */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
-            <div className="co-title" style={{ fontSize: 16 }}>{companyName}</div>
-            <div style={{ fontSize: 10, fontWeight: 700 }}>No.: {contratoNum}</div>
-          </div>
-
-          {/* Info básica */}
-          <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000', marginBottom: 4 }}>
-            <tbody>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px', width: '40%' }}>
-                  <div style={{ fontSize: 7, fontWeight: 700 }}>NOMBRE:</div>
-                  <div style={{ fontSize: 9 }}>{client?.full_name ?? ''}</div>
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px', width: '20%' }}>
-                  <div style={{ fontSize: 7, fontWeight: 700 }}>CATEGORÍA:</div>
-                  <div style={{ fontSize: 9 }}/>
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px', width: '20%' }}>
-                  <div style={{ fontSize: 7, fontWeight: 700 }}>FICHA DEL VEHÍCULO:</div>
-                  <div style={{ fontSize: 9 }}>{vehicle?.id?.slice(0,8).toUpperCase() ?? ''}</div>
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px', width: '20%' }}>
-                  <div style={{ fontSize: 7, fontWeight: 700 }}>PLACA DEL VEHÍCULO:</div>
-                  <div style={{ fontSize: 9 }}>{vehicle?.plates ?? ''}</div>
-                </td>
-              </tr>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7, fontWeight: 700 }}>CONTRATO NUM.:</div>
-                  <div style={{ fontSize: 9 }}>{contratoNum}</div>
-                </td>
-                <td colSpan={2} style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7, fontWeight: 700 }}>COLOR DEL VEHÍCULO:</div>
-                  <div style={{ fontSize: 9 }}>{vehicle?.color ?? ''}</div>
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7, fontWeight: 700 }}>MODELO DEL VEHÍCULO:</div>
-                  <div style={{ fontSize: 9 }}>{vehicle ? `${vehicle.brand} ${vehicle.model} ${vehicle.year}` : ''}</div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* Diagramas del vehículo */}
-          <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000', marginBottom: 4 }}>
-            <tbody>
-              {/* Fila 1: Delantera | título | Trasera */}
-              <tr>
-                <td style={{ width: '40%', border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 2 }}>DELANTERA</div>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/Frente.jfif" alt="Frente" style={imgStyle} />
-                </td>
-                <td style={{ width: '20%', border: '0.7px solid #000', padding: '2px 4px', textAlign: 'center', verticalAlign: 'middle' }}>
-                  <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase' }}>CONDICIÓN<br/>DEL<br/>VEHÍCULO</div>
-                </td>
-                <td style={{ width: '40%', border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 2, textAlign: 'right' }}>TRASERA</div>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/Trasera.jfif" alt="Trasera" style={imgStyle} />
-                </td>
-              </tr>
-              {/* Fila 2: Lateral izq | Chequeo exterior */}
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 2 }}>LATERAL IZQUIERDO</div>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/Izquierda.jfif" alt="Lateral Izquierdo" style={imgStyle} />
-                </td>
-                <td colSpan={2} style={{ border: '0.7px solid #000', padding: '4px 8px', verticalAlign: 'top' }}>
-                  <div style={{ fontSize: 8, fontWeight: 700, marginBottom: 3 }}>CHEQUEO EXTERIOR :</div>
-                  {['MICAS / PANTALLAS.', 'LLAVE DE RUEDAS.', 'GOMA DE REPUESTO.', 'TAPA BOCINAS.', 'LIMPIAVIDRIOS.', 'ESPEJOS RETROV.', 'TAPA COMBUSTIBLE.', 'CRISTALES.', 'ANTENA.'].map(item => (
-                    <div key={item} className="check-item"><span className="box"/><span>{item}</span></div>
-                  ))}
-                </td>
-              </tr>
-              {/* Fila 3: Chequeo interior | Lateral derecho */}
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '4px 8px', verticalAlign: 'top' }}>
-                  <div style={{ fontSize: 8, fontWeight: 700, marginBottom: 3 }}>CHEQUEO INTERIOR :</div>
-                  {['CONTROL DE ALARMAS.', 'ALFROMBRAS.', 'ASIENTOS.', 'REJILLAS DE AIRE.', 'LUCES DE INTERIOR.', 'CINTURÓN DE SEG.', 'ESPEJOS RETROV.', 'DOCUMENTOS.', 'CARGADORES.'].map(item => (
-                    <div key={item} className="check-item"><span className="box"/><span>{item}</span></div>
-                  ))}
-                </td>
-                <td colSpan={2} style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 2, textAlign: 'right' }}>LATERAL DERECHO</div>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/Derecha.jfif" alt="Lateral Derecho" style={imgStyle} />
-                </td>
-              </tr>
-              {/* Fila 4: Baúl / Bonete / Techo - full width */}
-              <tr>
-                <td colSpan={3} style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 2 }}>BAÚL / BONETE / TECHO</div>
-                  <div style={{ display: 'flex', justifyContent: 'center' }}>
-                    <div style={{ width: 260 }}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src="/Arriba.jfif" alt="Vista Superior" style={imgStyleTop} />
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          {/* Salida / Entrada */}
-          <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000', marginBottom: 4 }}>
-            <thead>
-              <tr>
-                <th style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700, width: '50%', textAlign: 'left', background: '#f0f0f0' }}>
-                  SALIDA DEL VEHÍCULO
-                </th>
-                <th style={{ border: '0.7px solid #000', padding: '2px 4px', fontSize: 8, fontWeight: 700, width: '50%', textAlign: 'left', background: '#f0f0f0' }}>
-                  ENTRADA DEL VEHÍCULO
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <Field label="ESTACIÓN" value="" />
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <Field label="ESTACIÓN" value="" />
-                </td>
-              </tr>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '3px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 3 }}>NIVEL DE COMBUSTIBLE:</div>
-                  <FuelGauge level={checkout?.fuel_level ?? undefined} small />
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '3px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 3 }}>NIVEL DE COMBUSTIBLE:</div>
-                  <FuelGauge level={checkin?.fuel_level ?? undefined} small />
-                </td>
-              </tr>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <Field label="FECHA - HORA" value={fmt(reservation.start_date)} />
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <Field label="FECHA - HORA" value={isOpenEnded(reservation.end_date) ? '' : fmt(reservation.end_date)} />
-                </td>
-              </tr>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <Field label="ODÓMETRO (KM)" value={checkout?.odometer} />
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <Field label="ODÓMETRO (KM)" value={checkin?.odometer} />
-                </td>
-              </tr>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 1 }}>OBSERVACIONES:</div>
-                  <div style={{ minHeight: 28, fontSize: 8 }}>{checkout?.notes ?? ''}</div>
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 1 }}>OBSERVACIONES:</div>
-                  <div style={{ minHeight: 28, fontSize: 8 }}>{checkin?.notes ?? ''}</div>
-                </td>
-              </tr>
-              {/* Firmas */}
-              {[
-                ['FIRMA DE QUIEN ENTREGA EL VEHÍCULO:', 'FIRMA DE QUIEN RECIBE EL VEHÍCULO:'],
-                ['FIRMA DEL COND. ADICIONAL:', 'FIRMA DEL COND. ADICIONAL:'],
-                ['FIRMA DEL CLIENTE:', 'FIRMA DEL CLIENTE:'],
-              ].map(([l, r], i) => (
-                <tr key={i}>
-                  <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                    <div className="sig-label">{l}</div>
-                    <div className="sig-line" />
-                  </td>
-                  <td style={{ border: '0.7px solid #000', padding: '2px 4px' }}>
-                    <div className="sig-label">{r}</div>
-                    <div className="sig-line" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          {/* Pie de página */}
-          <table style={{ width: '100%', borderCollapse: 'collapse', border: '0.7px solid #000' }}>
-            <tbody>
-              <tr>
-                <td style={{ border: '0.7px solid #000', padding: '3px 5px', width: '55%', verticalAlign: 'top' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 2 }}>INFORMACIÓN:</div>
-                  <div className="note-block">
-                    {bizCity}<br/>
-                    {bizEmail}<br/>
-                    {bizEmail2}<br/>
-                    {bizPhone}<br/>
-                    RS: {companyName.toUpperCase()} SRL. {bizRnc}
-                  </div>
-                </td>
-                <td style={{ border: '0.7px solid #000', padding: '3px 5px', verticalAlign: 'top' }}>
-                  <div style={{ fontSize: 7.5, fontWeight: 700, marginBottom: 2 }}>COMENTARIO DEL AUXILIAR:</div>
-                  <div style={{ minHeight: 36 }} />
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
+        <div className="page page-full">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/docs/contrato-parte-atras.png" alt="Contrato de arrendamiento a corto plazo — parte atrás" />
         </div>{/* fin página 2 */}
 
         {/* ── Carta de declinación de seguros (provisional) ────────────────── */}
         {bd.waive_all && declinedNames.length > 0 && <WaiverLetter {...extraCommon} declined={declinedNames} />}
 
-        {/* ── Documento del seguro de tarjeta (provisional) ────────────────── */}
-        {cardIns && <CardInsuranceDoc {...extraCommon} cardName={CARD_INSURANCES[cardIns]} keeps={cardKeeps} />}
+        {/* ── Carta oficial del seguro de tarjeta (Visa / Mastercard / Amex) ── */}
+        {cardIns && <CardDeclineLetter card={cardIns} cardName={CARD_INSURANCES[cardIns]} />}
 
         {/* ── Anexo: equipo entregado y cargos adicionales ─────────────────── */}
         {hasAnnex && (
@@ -1062,7 +852,7 @@ export default async function ContratoPrintPage({ params, searchParams }: Props)
         )}
 
         {/* ── Términos y condiciones (siempre) ─────────────────────────────── */}
-        <TermsPage {...extraCommon} terms={contractTerms} />
+        <TermsPage {...extraCommon} terms={contractTerms} lang={lang} />
 
       </div>
     </>
